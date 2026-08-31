@@ -100,10 +100,10 @@ export function spawnAgentProcess(bin: string, args: string[], cwd: string): Age
 		const text = chunk.toString("utf8");
 		dataCbs.forEach((cb) => cb(text));
 	});
-	child.on("exit", (code) => {
+	child.on("exit", (code: number | null) => {
 		exitCbs.forEach((cb) => cb(code));
 	});
-	child.on("error", (err) => {
+	child.on("error", (err: Error) => {
 		dataCbs.forEach((cb) => cb(`\r\n\x1b[31m[agent-console] Failed to start "${bin}": ${err.message}\x1b[0m\r\n`));
 		exitCbs.forEach((cb) => cb(null));
 	});
