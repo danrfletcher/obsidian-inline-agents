@@ -1,5 +1,5 @@
 {
-	"name": "obsidian-agent-console",
+	"name": "obsidian-inline-agents",
 	"version": "0.1.0",
 	"description": "Turn workflow instructions in a note into buttons that run Claude Code or OpenCode, with a live terminal.",
 	"main": "main.js",
@@ -7,9 +7,16 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
 	},
-	"keywords": [],
+	"keywords": [
+		"obsidian-plugin",
+		"claude-code",
+		"opencode",
+		"ai-agent",
+		"terminal",
+		"automation"
+	],
 	"author": "Dan Fletcher",
-	"license": "UNLICENSED",
+	"license": "MIT",
 	"devDependencies": {
 		"@types/node": "^20.14.2",
 		"builtin-modules": "^3.3.0",
@@ -21,5 +28,9 @@
 	"dependencies": {
 		"@xterm/addon-fit": "^0.10.0",
 		"@xterm/xterm": "^5.5.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/danrfletcher/obsidian-inline-agents.git"
 	}
 }
