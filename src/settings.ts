@@ -55,7 +55,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				heading: "Inline Agents",
 				items: [
 					{
-						name: "Agent",
+						name: "Default Agent",
 						desc: 'Which CLI agent note buttons run by default. A button can override this with its own "agent:" line.',
 						control: {
 							type: "dropdown",

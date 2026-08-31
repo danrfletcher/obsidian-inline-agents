@@ -32,7 +32,7 @@ interface ButtonSpec {
  * text: Run Sufficiency Check
  * prompt: Run teacher-artefact-sufficiency-check.md on {{this file}}
  * autoApprove: true
- * agent: claude
+ * agent: ClaudeCode
  * agentOutput: file
  * append: belowButton
  * showTerminal: false
@@ -43,6 +43,11 @@ interface ButtonSpec {
  * registerMarkdownCodeBlockProcessor is built for (works identically in
  * Reading view and Live Preview, no custom text-scanning/escaping to get
  * wrong), and it's the same shape the "Buttons" community plugin uses.
+ *
+ * `agent:` accepts `ClaudeCode`/`OpenCode` (case-insensitive; `claude` is
+ * also accepted as a synonym for `ClaudeCode`). Anything else — including
+ * the line being omitted entirely — falls back to the plugin-wide
+ * "Default Agent" setting.
  */
 function parseButtonBlock(source: string): ButtonSpec {
 	const spec: Partial<ButtonSpec> = {};
@@ -63,9 +68,15 @@ function parseButtonBlock(source: string): ButtonSpec {
 			case "autoapprove":
 				spec.autoApprove = /^(true|yes|on|1)$/i.test(value);
 				break;
-			case "agent":
-				spec.agent = value.toLowerCase() === "opencode" ? "opencode" : "claude";
+			case "agent": {
+				const v = value.toLowerCase().replace(/[\s-]+/g, "");
+				if (v === "opencode") spec.agent = "opencode";
+				else if (v === "claude" || v === "claudecode") spec.agent = "claude";
+				// Anything unrecognized is left unset so it falls back to the
+				// plugin-wide "Default Agent" setting rather than silently
+				// forcing Claude Code.
 				break;
+			}
 			case "agentoutput":
 				spec.agentOutput = value.toLowerCase() === "file" ? "file" : "terminal";
 				break;
