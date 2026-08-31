@@ -1,0 +1,25 @@
+{
+	"name": "obsidian-agent-console",
+	"version": "0.1.0",
+	"description": "Turn workflow instructions in a note into buttons that run Claude Code or OpenCode, with a live terminal.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+	},
+	"keywords": [],
+	"author": "Dan Fletcher",
+	"license": "UNLICENSED",
+	"devDependencies": {
+		"@types/node": "^20.14.2",
+		"builtin-modules": "^3.3.0",
+		"esbuild": "^0.21.5",
+		"obsidian": "^1.5.7",
+		"tslib": "2.6.2",
+		"typescript": "5.4.5"
+	},
+	"dependencies": {
+		"@xterm/addon-fit": "^0.10.0",
+		"@xterm/xterm": "^5.5.0"
+	}
+}
