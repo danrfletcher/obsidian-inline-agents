@@ -28,7 +28,7 @@ Drop a fenced code block with the `agent-button` language tag anywhere in a note
 text: Run Sufficiency Check
 prompt: Run features/learning-artefacts/teacher-artefact-sufficiency-check.md on {{this file}}
 autoApprove: true
-agent: claude
+agent: ClaudeCode
 agentOutput: file
 append: belowButton
 showTerminal: false
@@ -43,7 +43,7 @@ Every field except `text` and `prompt` is optional and falls back to a sensible 
 - **`text`** — the button label.
 - **`prompt`** — what gets sent to the agent as its first message. `{{this file}}` is replaced with the vault-relative path of the note the button is *in* (not whichever pane happens to be focused — it's resolved from the code block's own source note, so it's correct even with split panes).
 - **`autoApprove`** (`true`/`false`, optional) — overrides the plugin-wide **Auto-approve by default** setting for this one button. When on, the agent runs with permission checks bypassed (`claude --dangerously-skip-permissions` / `opencode run --auto`). When off, it asks before each tool use, right there in the terminal.
-- **`agent`** (`claude`/`opencode`, optional) — overrides the plugin-wide agent choice for this one button.
+- **`agent`** (`ClaudeCode`/`OpenCode`, case-insensitive, optional) — overrides the plugin-wide **Default Agent** setting for this one button. Unrecognized or omitted values fall back to that setting.
 - **`agentOutput`** (`terminal`/`file`, default `terminal`) — where the agent's output ends up.
   - `terminal` — output stays in the live terminal accordion, as before. Nothing is written to the note.
   - `file` — once the run finishes, the captured output is written into the note itself (see [How file output is captured](#how-file-output-is-captured) below). The terminal accordion is still available while the run is live (subject to `showTerminal`); it's only the *destination* of the final result that changes.
