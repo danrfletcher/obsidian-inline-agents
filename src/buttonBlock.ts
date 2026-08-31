@@ -121,10 +121,10 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 		completeBtn.setAttr("aria-label", "Complete");
 
 		const toggle = wrapper.createDiv({ cls: "agent-console-toggle", text: "Show terminal" });
-		toggle.style.display = "none";
+		toggle.setCssStyles({ display: "none" });
 
 		const accordion = wrapper.createDiv({ cls: "agent-console-accordion" });
-		accordion.style.display = "none";
+		accordion.setCssStyles({ display: "none" });
 		const termHost = accordion.createDiv({ cls: "agent-console-term" });
 
 		let term: Terminal | null = null;
@@ -142,7 +142,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 
 		const setAccordionOpen = (open: boolean) => {
 			accordionOpen = open;
-			accordion.style.display = open ? "block" : "none";
+			accordion.setCssStyles({ display: open ? "block" : "none" });
 			toggle.setText(open ? "Hide terminal" : "Show terminal");
 			if (open) {
 				fitAddon?.fit();
@@ -186,7 +186,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			}
 			sessionAlive = true;
 			setVisualState("running");
-			toggle.style.display = "block";
+			toggle.setCssStyles({ display: "block" });
 
 			const showTerminal = spec.showTerminal ?? true;
 			setAccordionOpen(showTerminal);
