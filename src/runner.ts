@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { existsSync } from "fs";
 
 export interface AgentProcessHandle {
 	write: (data: string) => void;
@@ -7,25 +8,41 @@ export interface AgentProcessHandle {
 	onExit: (cb: (code: number | null) => void) => void;
 }
 
+// Candidates in preference order; first one that exists on disk wins.
+const PYTHON_CANDIDATES = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
+const PTY_SPAWN_SNIPPET = "import pty,sys; pty.spawn(sys.argv[1:])";
+
+function resolvePython(): string {
+	return PYTHON_CANDIDATES.find((p) => existsSync(p)) ?? "python3";
+}
+
 /**
  * Spawns `bin args...` allocated behind a real PTY, without needing a native
  * node-pty build tied to Obsidian's exact bundled Electron/Node ABI (which
  * would need a fresh prebuild every time Obsidian updates Electron).
  *
- * The trick: BSD `script` (present at /usr/bin/script on every Mac) opens a
- * pseudo-tty and proxies it to its own stdin/stdout — `script -q /dev/null
- * <cmd> <args>` runs <cmd> with a real TTY attached (verified live:
- * `process.stdout.isTTY` reports `true` inside it), which both Claude Code's
- * and OpenCode's interactive/Ink-style UIs need to render and to prompt for
- * permission approval. `/dev/null` discards script's own on-disk transcript
- * copy — we read the live stream straight off the child's stdout instead.
+ * First attempt here was BSD `script -q /dev/null <cmd> <args>` — works
+ * perfectly when *you* run it from a real terminal (verified), but FAILS
+ * when Obsidian spawns it: `script: tcgetattr/ioctl: Operation not
+ * supported on socket`. Reproduced outside Obsidian entirely with a bare
+ * `node -e "require('child_process').spawn('script', ...)"` — Node's
+ * default 'pipe' stdio hands the child a socket-backed fd, and BSD script's
+ * setup path calls tcgetattr on it (to replicate the *caller's* terminal
+ * settings onto the new pty), which errors on a non-tty/non-regular-pipe fd.
+ *
+ * Fix: `python3 -c "import pty,sys; pty.spawn(sys.argv[1:])"` instead.
+ * Python's pty.spawn() does its own openpty()/fork() and doesn't try to
+ * copy termios settings from a controlling terminal that may not exist —
+ * verified working from the exact same socket-stdio spawn shape Obsidian
+ * uses: `process.stdout.isTTY` reports `true` inside the child, and a
+ * bidirectional write/read round-trip (via `cat`) worked correctly.
  *
  * Trade-off vs. real node-pty: terminal resize doesn't propagate to the
  * child (no ioctl access from here), so a very long agent run in a resized
  * pane may wrap awkwardly. Content still comes through correctly either way.
  */
 export function spawnAgentProcess(bin: string, args: string[], cwd: string): AgentProcessHandle {
-	const child = spawn("script", ["-q", "/dev/null", bin, ...args], {
+	const child = spawn(resolvePython(), ["-c", PTY_SPAWN_SNIPPET, bin, ...args], {
 		cwd,
 		env: process.env,
 	});
