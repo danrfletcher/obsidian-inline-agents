@@ -45,6 +45,51 @@
 	}
 }
 
+/* Shown instead of the spinner while completion: responseEnd has detected
+   the agent is blocked on a question (a permission prompt, a menu, etc.)
+   rather than still generating — see src/outputCapture.ts. */
+.agent-console-pencil {
+	display: none;
+	font-size: 0.95em;
+	line-height: 1;
+}
+
+.agent-console-button.is-awaiting-input .agent-console-pencil {
+	display: inline-block;
+}
+
+.agent-console-button.is-awaiting-input .agent-console-spinner {
+	display: none;
+}
+
+/* completion: manual's "kill the session and finish up" affordance, next
+   to the main button rather than inside it. */
+.agent-console-complete-btn {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 1.7em;
+	height: 1.7em;
+	margin-left: 0.4em;
+	padding: 0;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+	vertical-align: middle;
+}
+
+.agent-console-complete-btn.is-visible {
+	display: inline-flex;
+}
+
+.agent-console-complete-btn:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
 .agent-console-toggle {
 	display: none;
 	margin-top: 0.4em;

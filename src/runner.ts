@@ -16,6 +16,44 @@ function resolvePython(): string {
 	return PYTHON_CANDIDATES.find((p) => existsSync(p)) ?? "python3";
 }
 
+// Known install locations for the agent CLIs, across the environments this
+// vault actually runs in: Dan's real Mac (via .local/bin, homebrew, or a
+// plain global npm install) and the `desktop-obsidian` Docker container
+// (npm global installs land in /usr/bin there). `data.json` is a single
+// file shared between both — a path valid in one is often not valid in the
+// other — so `resolveBinary` below treats the configured setting as a
+// preference, not a hard requirement, and falls through these before
+// giving up and trusting PATH.
+export const CLAUDE_CANDIDATES = [
+	"/Users/danfletcher/.local/bin/claude",
+	"/usr/bin/claude",
+	"/usr/local/bin/claude",
+	"/opt/homebrew/bin/claude",
+];
+export const OPENCODE_CANDIDATES = [
+	"/usr/bin/opencode",
+	"/usr/local/bin/opencode",
+	"/opt/homebrew/bin/opencode",
+	"/Users/danfletcher/.local/bin/opencode",
+];
+
+/**
+ * Resolves which binary to actually exec for an agent, so a single shared
+ * `data.json` keeps working whether this vault is open on the real Mac or
+ * inside the container:
+ *  1. the user's configured path, if it exists on this filesystem
+ *  2. the first known candidate location that exists on this filesystem
+ *  3. `binName` bare (no slash) — Node's spawn() then does its own PATH
+ *     lookup at exec time, which covers any install this list doesn't know
+ *     about, provided it's on the PATH the process actually launches with.
+ */
+export function resolveBinary(configuredPath: string, binName: string, candidates: string[]): string {
+	if (configuredPath && existsSync(configuredPath)) return configuredPath;
+	const found = candidates.find((p) => existsSync(p));
+	if (found) return found;
+	return binName;
+}
+
 /**
  * Spawns `bin args...` allocated behind a real PTY, without needing a native
  * node-pty build tied to Obsidian's exact bundled Electron/Node ABI (which
@@ -35,7 +73,11 @@ function resolvePython(): string {
  * copy termios settings from a controlling terminal that may not exist —
  * verified working from the exact same socket-stdio spawn shape Obsidian
  * uses: `process.stdout.isTTY` reports `true` inside the child, and a
- * bidirectional write/read round-trip (via `cat`) worked correctly.
+ * bidirectional write/read round-trip (via `cat`) worked correctly. Also
+ * verified end to end inside the `desktop-obsidian` Docker container (its
+ * python3 lives at /lsiopy/bin/python3 — not in PYTHON_CANDIDATES above,
+ * but still resolves correctly via the bare-name PATH fallback since that
+ * path is on the container's PATH).
  *
  * Trade-off vs. real node-pty: terminal resize doesn't propagate to the
  * child (no ioctl access from here), so a very long agent run in a resized

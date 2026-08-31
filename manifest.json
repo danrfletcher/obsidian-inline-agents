@@ -1,6 +1,6 @@
 {
-	"id": "obsidian-agent-console",
-	"name": "Agent Console",
+	"id": "inline-agents",
+	"name": "Inline Agents",
 	"version": "0.1.0",
 	"minAppVersion": "1.4.11",
 	"description": "Turn \"run this workflow\" instructions in a note into a button that fires Claude Code or OpenCode at the note, with a live terminal underneath.",

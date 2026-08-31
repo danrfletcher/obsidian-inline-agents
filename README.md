@@ -6,7 +6,7 @@ Built to replace plain-text "Run `features/learning-artefacts/teacher-artefact-l
 
 ## Install (local, this vault)
 
-Already wired up: `.obsidian/plugins/obsidian-inline-agents` is a symlink into this repo, so Obsidian loads it directly — no build step needed to use it as-is. Enable it in **Settings → Community plugins** (turn on Community plugins first if you haven't) and toggle **Inline Agents** on.
+Already wired up: `.obsidian/plugins/inline-agents` is a symlink into this repo, so Obsidian loads it directly — no build step needed to use it as-is. Enable it in **Settings → Community plugins** (turn on Community plugins first if you haven't) and toggle **Inline Agents** on.
 
 ## How it works
 
