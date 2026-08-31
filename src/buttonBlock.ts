@@ -8,6 +8,8 @@ import { buildAgentCommand } from "./agents";
 import { spawnAgentProcess, AgentProcessHandle, resolveBinary, CLAUDE_CANDIDATES, OPENCODE_CANDIDATES } from "./runner";
 import { classifyTurnState, extractCleanText } from "./outputCapture";
 import { writeAgentOutputToFile, AppendPosition } from "./fileOutput";
+import { buildAgentContext } from "./context";
+import { renderPromptTemplate } from "./templating";
 
 type AgentOutputTarget = "terminal" | "file";
 type CompletionMode = "responseEnd" | "manual";
@@ -30,20 +32,29 @@ interface ButtonSpec {
 /**
  * ```agent-button
  * text: Run Sufficiency Check
- * prompt: Run teacher-artefact-sufficiency-check.md on {{this file}}
+ * prompt: Run teacher-artefact-sufficiency-check.md on {{file.path}}
  * autoApprove: true
- * agent: claude
+ * agent: ClaudeCode
  * agentOutput: file
  * append: belowButton
  * showTerminal: false
  * completion: responseEnd
  * ```
- * Deliberately a plain `key: value`-per-line block rather than an inline
- * `{{shortcode}}` syntax — it's what Obsidian's own
+ * The block itself is deliberately a plain `key: value`-per-line format
+ * rather than an inline shortcode syntax — it's what Obsidian's own
  * registerMarkdownCodeBlockProcessor is built for (works identically in
  * Reading view and Live Preview, no custom text-scanning/escaping to get
  * wrong), and it's the same shape the "Buttons" community plugin uses.
+ * `prompt`'s own value supports `{{ }}` context lookups and (opt-in)
+ * `{{= }}` JS expressions — see templating.ts / context.ts.
  */
+function parseAgentKind(value: string): AgentKind | undefined {
+	const normalized = value.toLowerCase().replace(/[\s_-]+/g, "");
+	if (normalized === "claude" || normalized === "claudecode") return "claude";
+	if (normalized === "opencode") return "opencode";
+	return undefined;
+}
+
 function parseButtonBlock(source: string): ButtonSpec {
 	const spec: Partial<ButtonSpec> = {};
 	for (const rawLine of source.split("\n")) {
@@ -64,7 +75,7 @@ function parseButtonBlock(source: string): ButtonSpec {
 				spec.autoApprove = /^(true|yes|on|1)$/i.test(value);
 				break;
 			case "agent":
-				spec.agent = value.toLowerCase() === "opencode" ? "opencode" : "claude";
+				spec.agent = parseAgentKind(value);
 				break;
 			case "agentoutput":
 				spec.agentOutput = value.toLowerCase() === "file" ? "file" : "terminal";
@@ -92,13 +103,6 @@ function parseButtonBlock(source: string): ButtonSpec {
 		showTerminal: spec.showTerminal,
 		completion: spec.completion,
 	};
-}
-
-/** `{{this file}}` → the vault-relative path of the note the button lives
- * in (ctx.sourcePath — the file this code block belongs to, not whichever
- * pane happens to be focused, so it's correct even with split panes). */
-function resolvePrompt(template: string, sourcePath: string): string {
-	return template.replace(/\{\{\s*this file\s*\}\}/gi, sourcePath);
 }
 
 export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
@@ -217,7 +221,16 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				setCompleteBtnVisible(false);
 				return;
 			}
-			const prompt = resolvePrompt(spec.prompt, ctx.sourcePath);
+			const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
+			const rendered = renderPromptTemplate(spec.prompt, context, { allowJs: settings.allowJsExpressions });
+			if (rendered.error) {
+				term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
+				sessionAlive = false;
+				setVisualState("idle");
+				setCompleteBtnVisible(false);
+				return;
+			}
+			const prompt = rendered.text;
 			// The configured path is a preference, not a guarantee — this same
 			// data.json is shared between Dan's real Mac and the desktop-obsidian
 			// container, and a path valid in one is usually wrong in the other.

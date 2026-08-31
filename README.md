@@ -26,9 +26,9 @@ Drop a fenced code block with the `agent-button` language tag anywhere in a note
 ````markdown
 ```agent-button
 text: Run Sufficiency Check
-prompt: Run features/learning-artefacts/teacher-artefact-sufficiency-check.md on {{this file}}
+prompt: Run features/learning-artefacts/teacher-artefact-sufficiency-check.md on {{file.path}}
 autoApprove: true
-agent: claude
+agent: ClaudeCode
 agentOutput: file
 append: belowButton
 showTerminal: false
@@ -41,9 +41,9 @@ Every field except `text` and `prompt` is optional and falls back to a sensible 
 ### Fields
 
 - **`text`** — the button label.
-- **`prompt`** — what gets sent to the agent as its first message. `{{this file}}` is replaced with the vault-relative path of the note the button is *in* (not whichever pane happens to be focused — it's resolved from the code block's own source note, so it's correct even with split panes).
+- **`prompt`** — what gets sent to the agent as its first message. Supports `{{ }}` context and `{{= }}` expressions — see [Context and templating](#context-and-templating) below.
 - **`autoApprove`** (`true`/`false`, optional) — overrides the plugin-wide **Auto-approve by default** setting for this one button. When on, the agent runs with permission checks bypassed (`claude --dangerously-skip-permissions` / `opencode run --auto`). When off, it asks before each tool use, right there in the terminal.
-- **`agent`** (`claude`/`opencode`, optional) — overrides the plugin-wide agent choice for this one button.
+- **`agent`** (`ClaudeCode`/`OpenCode`, optional) — overrides the plugin-wide **Default Agent** choice for this one button. The parser also accepts lowercase aliases like `claude` and `opencode`.
 - **`agentOutput`** (`terminal`/`file`, default `terminal`) — where the agent's output ends up.
   - `terminal` — output stays in the live terminal accordion, as before. Nothing is written to the note.
   - `file` — once the run finishes, the captured output is written into the note itself (see [How file output is captured](#how-file-output-is-captured) below). The terminal accordion is still available while the run is live (subject to `showTerminal`); it's only the *destination* of the final result that changes.
@@ -63,6 +63,39 @@ This controls when the button's spinner clears — which is a separate thing fro
 - **`manual`** (default) — the button stays in its loading state until the terminal session is closed, either by hand (closing the terminal, or the note itself, which sends the session `SIGINT`) or via the small checkmark button that appears to the right of the main button whenever a run is live under this mode (hover it to see the "Complete" tooltip). Clicking it kills the session and returns the button to idle. This is the safest default: nothing decides "the agent is done" on your behalf.
 - **`responseEnd`** — the button's loading state clears automatically as soon as the agent finishes responding, *without* killing the underlying session — it keeps running in the background until the note is closed or it's killed some other way. This is heuristic: the plugin watches the rendered terminal for Claude Code's own turn-completion marker (a line like `Crunched for 7s · done 2:54 PM`) and clears the spinner when it sees one. If the agent is instead showing a dialog or question it's blocked on — a permission prompt, a "yes/no" confirmation — the spinner is swapped for a ✏️ icon instead of clearing, so a run that's actually waiting on you doesn't silently look finished. This detection is tuned against Claude Code's observed CLI output and is unverified against OpenCode, which may not use the same conventions at all (see [Known limitations](#known-limitations-mvp)).
 
+### Context and templating
+
+`prompt:` isn't just a static string — it's a template rendered against a snapshot of the note the button lives in, taken at click time (`src/context.ts` / `src/templating.ts`). Two tiers:
+
+**`{{ path.to.value }}` — plain lookups, always available.** Dot-path access into the context object below. An unknown *root* name (e.g. a typo like `{{flie.basename}}`) is left in the prompt untouched, so the mistake stays visible rather than silently vanishing; a missing value under a *known* root (e.g. no frontmatter, or a field that isn't set) renders as an empty string.
+
+Available context:
+
+| Path | Value |
+| --- | --- |
+| `file.path` | Vault-relative path of the note the button is in |
+| `file.basename` | Filename without extension |
+| `file.name` | Filename with extension |
+| `file.folder` | Vault-relative path of the containing folder ("" at vault root) |
+| `file.extension` | File extension without the dot |
+| `file.frontmatter.<key>` | Any YAML frontmatter field |
+| `file.tags` | All tags on the note (frontmatter `tags` + inline `#tags`, deduped) |
+| `file.ctime` / `file.mtime` | Creation / modification time, ISO 8601 |
+| `vault.name` | Vault's display name |
+| `vault.basePath` | Vault's real filesystem path |
+| `date.today` | Today's date, `YYYY-MM-DD` |
+| `date.now` | Current timestamp, ISO 8601 |
+
+**`{{= expression }}` — a small expression language, opt-in.** For anything a plain lookup can't express — conditionals, comparisons, string building — `{{= }}` evaluates a compact expression against the same context, with property access (`file.frontmatter.status`), string/number/boolean literals, `+ - * / %`, comparisons (`== != === !== < <= > >=`), `&& || !`, a ternary (`cond ? a : b`), and a small fixed set of helper functions: `join(arr, sep)`, `upper(s)`, `lower(s)`, `default(val, fallback)`, `includes(collection, item)`, `length(x)`. For example:
+
+```
+prompt: {{= file.frontmatter.status === "draft" ? "Finish drafting " + file.basename : "Review " + file.basename }}
+```
+
+This is deliberately **not** arbitrary JavaScript via `eval`/`new Function` — Obsidian's own community-plugin lint (`eslint-plugin-obsidianmd`) flags that pattern and its config marks the rule non-suppressible, a hard constraint for anything submitted to the community plugin directory, not a style preference. `src/expr.ts` is a small hand-written parser/interpreter instead: no assignment, no loops, no access to anything outside the context object, and a fixed, closed set of callable names — there's no code-execution surface to sandbox because there's no way to reach outside the grammar. It covers the realistic "compute part of a prompt from this note's metadata" use case without that risk.
+
+Because it can run arbitrary-ish logic (however constrained) on every click, `{{= }}` is **off by default** — a button using it does nothing until **Allow JavaScript expressions in prompts** is turned on in Settings → Inline Agents. While off, a button whose prompt contains `{{= }}` writes a clear error to the terminal and doesn't run, rather than silently sending the literal `{{= ... }}` text to the agent.
+
 ### How file output is captured
 
 When `agentOutput: file` is set, the plugin renders the full xterm buffer to plain text once the run ends and strips out what it recognizes as its own scaffolding or CLI/TUI chrome — the `$ <binary> <args>` echo line, Claude Code's own prompt echo, the turn-completion summary line, the persistent bottom status bar, box-drawing-only lines, and (if the session was killed mid-run) the raw Python `KeyboardInterrupt` traceback that `pty.spawn` surfaces on `SIGINT`. What's left is written into the note as:
@@ -75,7 +108,7 @@ When `agentOutput: file` is set, the plugin renders the full xterm buffer to pla
 
 This captures the whole visible session transcript (tool-call summaries included, not just the agent's final reply) rather than attempting to isolate "the assistant's message" specifically — doing real semantic extraction of just the reply would need much deeper, CLI-specific knowledge of each agent's exact output format than is safe to assume here. It's good enough to drop into a note as a record of the run; it isn't a guarantee of a perfectly clean, chrome-free transcript in every case, especially for CLIs whose output this hasn't been tuned against.
 
-Settings (gear icon → Inline Agents): which agent runs by default, each agent's binary path, and the default auto-approve toggle.
+Settings (gear icon → Inline Agents): the Default Agent used when a button does not specify `agent:`, each agent's binary path, the default auto-approve toggle, and whether `{{= }}` expressions in prompts are allowed to run (see [Context and templating](#context-and-templating)).
 
 ## Known limitations (MVP)
 
@@ -86,6 +119,8 @@ Settings (gear icon → Inline Agents): which agent runs by default, each agent'
 - **Closing the note kills a `manual`-mode run.** Each button's process is tied to its block's lifetime; navigating away from the note (destroying that block) sends the child process `SIGINT`. There's no background-run registry that survives the view closing entirely — a run started under `completion: responseEnd` does outlive the button going idle, but not the note being closed.
 - **No live terminal resize signal to the child.** The PTY is allocated via `python3`'s `pty.spawn()` rather than a native `node-pty` build, specifically to avoid Electron-ABI version-pinning headaches. The trade-off is `SIGWINCH`/`ioctl` resize forwarding — a long run in a pane you resize mid-flight may wrap oddly, but content still comes through correctly.
 - **One button = one fixed workflow.** Each `agent-button` block has one hardcoded prompt; there's no dropdown/picker for choosing a workflow at click time. A real improvement here would be auto-detecting existing plain-text "Run `X.md`" instructions in a vault and turning them into buttons automatically — not yet built.
+- **`{{= }}` expressions are regex-delimited, not brace-matched.** Both `{{= }}` and `{{ }}` are found with a non-greedy match up to the first `}}`, so an expression containing a literal `}}` (most plausibly a nested object/array literal) won't parse correctly. Realistic prompt-building — property access, comparisons, string concatenation, ternaries, the built-in helpers — doesn't hit this; it's a limitation of the templating layer around `src/expr.ts`, not the expression language itself.
+- **`&&`, `||`, and `? :` in `{{= }}` always evaluate both sides**, unlike real JS short-circuiting. Harmless in practice — everything in the expression language is a pure, total function of its inputs (property access never throws, and the only callable functions are the fixed pure helpers), so there's no side effect an unused branch could produce — but worth knowing if you were expecting `a || expensiveLookup()` to skip `expensiveLookup()`.
 - **Uses Node's `child_process` and `fs` directly.** This is what `isDesktopOnly: true` in manifest.json is declaring — the whole plugin exists to spawn a real CLI process (Claude Code / OpenCode) behind a PTY and locate the vault on disk to use as its working directory, so this isn't optional. Obsidian's own automated review flags direct filesystem/shell access as a Warning under BEHAVIOR — an accurate observation about this plugin's Node/Electron dependency, not a bug, and not something a desktop-only plugin like this one can avoid.
 - **`src/runner.ts`'s Node API surface is asserted through local interfaces, not left as raw `@types/node` types.** Obsidian's community-review type-checker doesn't resolve Node's ambient declarations the way this repo's own `tsc`/eslint do — `process`, and the return values of `existsSync`/`spawn`, all come back typed `any` on their end, cascading into a wall of `@typescript-eslint/no-unsafe-*` findings even though `npm run lint` here was always clean. Moving `@types/node` into `dependencies` (tried first, on the theory their checker only installs `dependencies`) turned out not to be it — a preview scan of that exact commit still showed every warning. The fix that actually worked: every touchpoint in `runner.ts` now goes through `X as unknown as T` into a small hand-written interface describing just the shape this file uses. That assertion type-checks — and produces the same concrete, non-`any` type — no matter whether the underlying value resolves as `any`, a real Node signature, or anything else, so it closes the gap in both environments at once rather than guessing at which one is right.
 - **xterm.js's own CSS is vendored wholesale into `styles.css`.** A couple of its rules (underline-style `text-decoration` combinations, and an `!important` on `.xterm-dim` needed to override inline styles xterm.js sets at runtime — see the comment above it) trip Obsidian's CSS lint. Left as shipped by xterm.js rather than hand-edited, since changing vendored terminal-rendering CSS to satisfy a style-guide check risks breaking ANSI rendering for the sake of a cosmetic warning.

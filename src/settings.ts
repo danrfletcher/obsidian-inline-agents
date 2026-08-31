@@ -6,6 +6,12 @@ import type { AgentKind } from "./agents";
 export interface AgentConsoleSettings {
 	agent: AgentKind;
 	autoApproveDefault: boolean;
+	/** Gates `{{= expr }}` JS expressions in `prompt:` templates (see
+	 * templating.ts). Off by default — an expression evaluates with
+	 * `new Function` against the button's context, which is arbitrary code
+	 * execution scoped to whatever's in that context; same posture
+	 * Dataview takes with its own JS-queries setting. */
+	allowJsExpressions: boolean;
 	claude: { binaryPath: string };
 	opencode: { binaryPath: string };
 }
@@ -22,6 +28,7 @@ export interface AgentConsoleSettings {
 export const DEFAULT_SETTINGS: AgentConsoleSettings = {
 	agent: "claude",
 	autoApproveDefault: false,
+	allowJsExpressions: false,
 	claude: { binaryPath: "/Users/danfletcher/.local/bin/claude" },
 	opencode: { binaryPath: "opencode" },
 };
@@ -55,8 +62,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				heading: "Inline Agents",
 				items: [
 					{
-						name: "Agent",
-						desc: 'Which CLI agent note buttons run by default. A button can override this with its own "agent:" line.',
+						name: "Default Agent",
+						desc: 'Which CLI agent note buttons run when they do not specify an "agent:" line.',
 						control: {
 							type: "dropdown",
 							key: "agent",
@@ -70,6 +77,17 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 							"When off, the agent asks before each tool use, right in the terminal, unless a button sets " +
 							'"autoApprove: true".',
 						control: { type: "toggle", key: "autoApproveDefault" },
+					},
+					{
+						name: "Allow JavaScript expressions in prompts",
+						desc:
+							'When on, a prompt\'s "{{= expression }}" segments run as real JavaScript (with the button\'s file, ' +
+							"vault, and date context in scope) before the agent sees them — e.g. " +
+							'"{{= file.frontmatter.status === \'draft\' ? \'Finish\' : \'Review\' }}". This is arbitrary code ' +
+							"execution scoped to that context, run whenever a note with such a button is opened and clicked, " +
+							'so it\'s off by default. Plain "{{ file.basename }}"-style lookups always work regardless of this ' +
+							"setting.",
+						control: { type: "toggle", key: "allowJsExpressions" },
 					},
 				],
 			},
@@ -118,6 +136,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				return this.plugin.settings.agent;
 			case "autoApproveDefault":
 				return this.plugin.settings.autoApproveDefault;
+			case "allowJsExpressions":
+				return this.plugin.settings.allowJsExpressions;
 			case "claudeBinaryPath":
 				return this.plugin.settings.claude.binaryPath;
 			case "opencodeBinaryPath":
@@ -134,6 +154,9 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				break;
 			case "autoApproveDefault":
 				this.plugin.settings.autoApproveDefault = Boolean(value);
+				break;
+			case "allowJsExpressions":
+				this.plugin.settings.allowJsExpressions = Boolean(value);
 				break;
 			case "claudeBinaryPath":
 				this.plugin.settings.claude.binaryPath = String(value).trim();
