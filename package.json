@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-inline-agents",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "Turn workflow instructions in a note into buttons that run Claude Code or OpenCode, with a live terminal.",
 	"main": "main.js",
 	"scripts": {
@@ -19,7 +19,6 @@
 	"author": "Dan Fletcher",
 	"license": "MIT",
 	"devDependencies": {
-		"@types/node": "^20.14.2",
 		"@typescript-eslint/eslint-plugin": "^8.68.0",
 		"@typescript-eslint/parser": "^8.68.0",
 		"esbuild": "^0.21.5",
@@ -30,6 +29,7 @@
 		"typescript": "5.4.5"
 	},
 	"dependencies": {
+		"@types/node": "^20.14.2",
 		"@xterm/addon-fit": "^0.10.0",
 		"@xterm/xterm": "^5.5.0"
 	},
