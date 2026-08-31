@@ -4,6 +4,15 @@ export interface RunOptions {
 	prompt: string;
 	cwd: string;
 	autoApprove: boolean;
+	/**
+	 * Literal string to pass as the CLI's `--model` flag (a model ID, or
+	 * whatever alias the CLI itself accepts — e.g. Claude Code's "sonnet").
+	 * Undefined means "don't pass --model at all", which leaves each CLI to
+	 * fall back to its own default resolution (env var, its own settings
+	 * file, last-used-per-directory, etc.) exactly as if it were run bare
+	 * from a terminal with no flag.
+	 */
+	model?: string;
 }
 
 export interface AgentCommand {
@@ -22,6 +31,9 @@ export function buildClaudeCommand(binaryPath: string, opts: RunOptions): AgentC
 	const args: string[] = [];
 	if (opts.autoApprove) {
 		args.push("--dangerously-skip-permissions");
+	}
+	if (opts.model) {
+		args.push("--model", opts.model);
 	}
 	args.push(opts.prompt);
 	return { bin: binaryPath || "claude", args };
@@ -43,6 +55,9 @@ export function buildOpenCodeCommand(binaryPath: string, opts: RunOptions): Agen
 	const args: string[] = ["run"];
 	if (opts.autoApprove) {
 		args.push("--auto");
+	}
+	if (opts.model) {
+		args.push("--model", opts.model);
 	}
 	args.push("--dir", opts.cwd);
 	args.push(opts.prompt);

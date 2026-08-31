@@ -4,6 +4,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type AgentConsolePlugin from "./main";
 import type { AgentKind } from "./agents";
+import type { ModelMapping } from "./settings";
 import { buildAgentCommand } from "./agents";
 import { spawnAgentProcess, AgentProcessHandle, resolveBinary, CLAUDE_CANDIDATES, OPENCODE_CANDIDATES } from "./runner";
 import { classifyTurnState, extractCleanText } from "./outputCapture";
@@ -17,6 +18,13 @@ interface ButtonSpec {
 	prompt: string;
 	autoApprove?: boolean;
 	agent?: AgentKind;
+	/**
+	 * Either the `name` of a mapping configured in Settings for whichever
+	 * agent this button ends up using, or a literal model string to pass
+	 * straight through (e.g. pasted via a model dropdown's copy button).
+	 * Undefined means "don't pass --model at all" — see resolveModel().
+	 */
+	model?: string;
 	/** Where the agent's output ends up. Default: "terminal". */
 	agentOutput?: AgentOutputTarget;
 	/** Only used when agentOutput is "file". Default: "bottom". */
@@ -33,6 +41,7 @@ interface ButtonSpec {
  * prompt: Run teacher-artefact-sufficiency-check.md on {{this file}}
  * autoApprove: true
  * agent: ClaudeCode
+ * model: myMainModel
  * agentOutput: file
  * append: belowButton
  * showTerminal: false
@@ -48,6 +57,14 @@ interface ButtonSpec {
  * also accepted as a synonym for `ClaudeCode`). Anything else — including
  * the line being omitted entirely — falls back to the plugin-wide
  * "Default Agent" setting.
+ *
+ * `model:` accepts either the `name` of a model mapping configured in
+ * Settings for whichever agent this button resolves to (case-insensitive),
+ * or a literal model string passed straight through to the CLI's `--model`
+ * flag (e.g. one copied via a mapping dropdown's copy button). Omitting the
+ * line entirely passes no `--model` flag at all, leaving the CLI to fall
+ * back to its own default the same way it would if run bare from a
+ * terminal.
  */
 function parseButtonBlock(source: string): ButtonSpec {
 	const spec: Partial<ButtonSpec> = {};
@@ -77,6 +94,14 @@ function parseButtonBlock(source: string): ButtonSpec {
 				// forcing Claude Code.
 				break;
 			}
+			case "model":
+				// Case preserved deliberately — a mapping name is matched
+				// case-insensitively at resolve time (see resolveModel()),
+				// but a literal model string passed straight through (e.g.
+				// an Ollama model like "orcarouter/Qwen3.8-27B-Uncensored")
+				// may be case-sensitive to whatever's on the other end.
+				spec.model = value;
+				break;
 			case "agentoutput":
 				spec.agentOutput = value.toLowerCase() === "file" ? "file" : "terminal";
 				break;
@@ -98,6 +123,7 @@ function parseButtonBlock(source: string): ButtonSpec {
 		prompt: spec.prompt ?? "",
 		autoApprove: spec.autoApprove,
 		agent: spec.agent,
+		model: spec.model,
 		agentOutput: spec.agentOutput,
 		append: spec.append,
 		showTerminal: spec.showTerminal,
@@ -110,6 +136,25 @@ function parseButtonBlock(source: string): ButtonSpec {
  * pane happens to be focused, so it's correct even with split panes). */
 function resolvePrompt(template: string, sourcePath: string): string {
 	return template.replace(/\{\{\s*this file\s*\}\}/gi, sourcePath);
+}
+
+/**
+ * A button's `model:` value is deliberately ambiguous between two things,
+ * resolved in this order:
+ *  1. the `name` of a mapping configured in Settings for whichever agent
+ *     this button ends up using (case-insensitive — "myMainModel" and
+ *     "mymainmodel" both hit the same row), or
+ *  2. failing that, the value itself, passed straight through as a literal
+ *     model string — this is what lets someone paste a raw model ID via a
+ *     dropdown option's copy button without configuring a mapping first.
+ * Undefined (the key was never set) short-circuits to undefined, which
+ * buildAgentCommand treats as "don't pass --model at all".
+ */
+function resolveModel(rawValue: string | undefined, mappings: ModelMapping[]): string | undefined {
+	if (!rawValue) return undefined;
+	const needle = rawValue.trim().toLowerCase();
+	const match = mappings.find((m) => m.name.trim().toLowerCase() === needle && m.name.trim() !== "");
+	return match ? match.model : rawValue;
 }
 
 export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
@@ -213,6 +258,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			const settings = plugin.settings;
 			const agentKind: AgentKind = spec.agent ?? settings.agent;
 			const autoApprove = spec.autoApprove ?? settings.autoApproveDefault;
+			const model = resolveModel(spec.model, agentKind === "opencode" ? settings.opencode.models : settings.claude.models);
 			const agentOutput: AgentOutputTarget = spec.agentOutput ?? "terminal";
 			const appendPosition: AppendPosition = spec.append ?? "bottom";
 			const completion: CompletionMode = spec.completion ?? "manual";
@@ -240,7 +286,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				agentKind === "opencode"
 					? resolveBinary(configuredPath, "opencode", OPENCODE_CANDIDATES)
 					: resolveBinary(configuredPath, "claude", CLAUDE_CANDIDATES);
-			const built = buildAgentCommand(agentKind, resolvedBinary, { prompt, cwd, autoApprove });
+			const built = buildAgentCommand(agentKind, resolvedBinary, { prompt, cwd, autoApprove, model });
 
 			term?.write(
 				`\x1b[2m$ ${built.bin} ${built.args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}\x1b[0m\r\n\r\n`
