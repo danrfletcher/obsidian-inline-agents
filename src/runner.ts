@@ -51,7 +51,11 @@ type SpawnFn = (
 	options: { cwd: string; env: Record<string, string | undefined> }
 ) => ChildProcessLike;
 const spawnProcess = spawn as unknown as SpawnFn;
-const processEnv = process.env as unknown as Record<string, string | undefined>;
+interface ProcessLike {
+	env: Record<string, string | undefined>;
+}
+const typedProcess = process as unknown as ProcessLike;
+const processEnv = typedProcess.env;
 // -------------------------------------------------------------------------
 
 // Candidates in preference order; first one that exists on disk wins.
