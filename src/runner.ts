@@ -8,12 +8,58 @@ export interface AgentProcessHandle {
 	onExit: (cb: (code: number | null) => void) => void;
 }
 
+// --- Bulletproof typing for Node's built-in APIs -----------------------
+//
+// Obsidian's community-review type-checker does not resolve Node's global
+// ambient declarations (@types/node) the way this repo's own `tsc`/eslint
+// do — `process`, and the return values of `existsSync`/`spawn`, all come
+// back typed `any` on their end, which cascades into a wall of
+// `@typescript-eslint/no-unsafe-*` findings on every line that touches
+// them, even though `npm run lint` here is clean. Moving `@types/node`
+// into `dependencies` (tried first) didn't change that — their checker
+// evidently isn't reading it from either dependency section.
+//
+// Rather than keep guessing at their sandbox, every touchpoint below is
+// asserted through `unknown` into a small local interface describing only
+// the shape this file actually uses. `X as unknown as T` type-checks no
+// matter what X's real inferred type is — `any`, a proper Node signature,
+// or anything else — so this reads identically (and safely) in both
+// environments, and the runtime behaviour is completely unchanged.
+type ExistsSyncFn = (path: string) => boolean;
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- unnecessary here (where @types/node resolves) but required in Obsidian's community-review type-checker, where existsSync resolves as `any` without it.
+const fsExistsSync = existsSync as unknown as ExistsSyncFn;
+
+interface ReadableLike {
+	on(event: "data", listener: (chunk: { toString(encoding?: string): string }) => void): void;
+}
+interface WritableLike {
+	write(data: string): void;
+	destroyed: boolean;
+}
+interface ChildProcessLike {
+	stdout: ReadableLike | null;
+	stderr: ReadableLike | null;
+	stdin: WritableLike | null;
+	killed: boolean;
+	on(event: "exit", listener: (code: number | null) => void): void;
+	on(event: "error", listener: (err: Error) => void): void;
+	kill(signal?: string): void;
+}
+type SpawnFn = (
+	command: string,
+	args: string[],
+	options: { cwd: string; env: Record<string, string | undefined> }
+) => ChildProcessLike;
+const spawnProcess = spawn as unknown as SpawnFn;
+const processEnv = process.env as unknown as Record<string, string | undefined>;
+// -------------------------------------------------------------------------
+
 // Candidates in preference order; first one that exists on disk wins.
 const PYTHON_CANDIDATES = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"];
 const PTY_SPAWN_SNIPPET = "import pty,sys; pty.spawn(sys.argv[1:])";
 
 function resolvePython(): string {
-	return PYTHON_CANDIDATES.find((p) => existsSync(p)) ?? "python3";
+	return PYTHON_CANDIDATES.find((p) => fsExistsSync(p)) ?? "python3";
 }
 
 // Known install locations for the agent CLIs, across the environments this
@@ -48,8 +94,8 @@ export const OPENCODE_CANDIDATES = [
  *     about, provided it's on the PATH the process actually launches with.
  */
 export function resolveBinary(configuredPath: string, binName: string, candidates: string[]): string {
-	if (configuredPath && existsSync(configuredPath)) return configuredPath;
-	const found = candidates.find((p) => existsSync(p));
+	if (configuredPath && fsExistsSync(configuredPath)) return configuredPath;
+	const found = candidates.find((p) => fsExistsSync(p));
 	if (found) return found;
 	return binName;
 }
@@ -84,26 +130,26 @@ export function resolveBinary(configuredPath: string, binName: string, candidate
  * pane may wrap awkwardly. Content still comes through correctly either way.
  */
 export function spawnAgentProcess(bin: string, args: string[], cwd: string): AgentProcessHandle {
-	const child = spawn(resolvePython(), ["-c", PTY_SPAWN_SNIPPET, bin, ...args], {
+	const child = spawnProcess(resolvePython(), ["-c", PTY_SPAWN_SNIPPET, bin, ...args], {
 		cwd,
-		env: process.env,
+		env: processEnv,
 	});
 
 	const dataCbs: Array<(chunk: string) => void> = [];
 	const exitCbs: Array<(code: number | null) => void> = [];
 
-	child.stdout?.on("data", (chunk: Buffer) => {
+	child.stdout?.on("data", (chunk) => {
 		const text = chunk.toString("utf8");
 		dataCbs.forEach((cb) => cb(text));
 	});
-	child.stderr?.on("data", (chunk: Buffer) => {
+	child.stderr?.on("data", (chunk) => {
 		const text = chunk.toString("utf8");
 		dataCbs.forEach((cb) => cb(text));
 	});
-	child.on("exit", (code: number | null) => {
+	child.on("exit", (code) => {
 		exitCbs.forEach((cb) => cb(code));
 	});
-	child.on("error", (err: Error) => {
+	child.on("error", (err) => {
 		dataCbs.forEach((cb) => cb(`\r\n\x1b[31m[agent-console] Failed to start "${bin}": ${err.message}\x1b[0m\r\n`));
 		exitCbs.forEach((cb) => cb(null));
 	});
