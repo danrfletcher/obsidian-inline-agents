@@ -124,6 +124,163 @@
 	margin: 0.25em 0 0.75em 0;
 }
 
+/* --- Settings: provider connection status dot --- */
+.agent-console-status-dot {
+	display: inline-block;
+	width: 0.6em;
+	height: 0.6em;
+	margin-left: 0.6em;
+	border-radius: 50%;
+	background: var(--text-faint);
+	vertical-align: middle;
+}
+
+.agent-console-status-dot.is-connected {
+	background: var(--color-green);
+}
+
+.agent-console-status-dot.is-disconnected {
+	background: var(--color-red);
+}
+
+.agent-console-status-dot.is-checking {
+	background: var(--text-faint);
+	animation: agent-console-status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes agent-console-status-pulse {
+	50% {
+		opacity: 0.35;
+	}
+}
+
+/* --- Settings: model mapping rows --- */
+.agent-console-model-list {
+	margin-bottom: 1em;
+}
+
+.agent-console-model-row {
+	display: flex;
+	align-items: center;
+	gap: 0.5em;
+	margin: 0.4em 0;
+}
+
+.agent-console-model-name {
+	flex: 0 0 30%;
+	min-width: 0;
+}
+
+.agent-console-model-name,
+.agent-console-model-value {
+	padding: 0.4em 0.6em;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+}
+
+.agent-console-model-picker {
+	position: relative;
+	flex: 1 1 auto;
+	display: flex;
+	align-items: center;
+	gap: 0.3em;
+	min-width: 0;
+}
+
+.agent-console-model-value {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.agent-console-model-picker-toggle {
+	flex: 0 0 auto;
+	padding: 0.3em 0.5em;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.agent-console-model-picker-toggle:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.agent-console-model-picker-menu {
+	position: absolute;
+	top: 100%;
+	left: 0;
+	right: 0;
+	z-index: 10;
+	margin-top: 0.25em;
+	max-height: 220px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
+}
+
+.agent-console-model-option {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5em;
+	padding: 0.4em 0.6em;
+	cursor: pointer;
+	font-size: var(--font-ui-small);
+}
+
+.agent-console-model-option:hover {
+	background: var(--background-modifier-hover);
+}
+
+.agent-console-model-option-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-console-model-option-copy {
+	flex: 0 0 auto;
+	padding: 0.1em 0.4em;
+	border-radius: 4px;
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.agent-console-model-option-copy:hover {
+	color: var(--text-normal);
+	border-color: var(--background-modifier-border);
+}
+
+.agent-console-model-picker-empty {
+	padding: 0.5em 0.6em;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+}
+
+.agent-console-model-remove {
+	flex: 0 0 auto;
+	padding: 0.3em 0.5em;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.agent-console-model-remove:hover {
+	background: var(--background-modifier-error);
+	color: var(--text-error);
+}
+
 /* --- xterm.js base styles (vendored from @xterm/xterm) --- */
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.

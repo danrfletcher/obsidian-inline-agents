@@ -173,3 +173,95 @@ export function spawnAgentProcess(bin: string, args: string[], cwd: string): Age
 		onExit: (cb) => exitCbs.push(cb),
 	};
 }
+
+export interface CommandResult {
+	code: number | null;
+	stdout: string;
+	stderr: string;
+}
+
+/**
+ * Runs `bin args...` to completion with plain piped stdio (no PTY, no
+ * interactivity) and collects its output — for one-shot, non-interactive
+ * probes like `--version` or `models`, not actual agent sessions. Used by
+ * the settings tab's connection-status dots and OpenCode's model-list
+ * fetch, so it's deliberately not the PTY path above: those are quick
+ * background checks, not something a user is meant to watch or type into.
+ *
+ * Times out and kills the child after `timeoutMs` rather than leaving the
+ * settings UI stuck on "checking…" forever if `bin` resolves to something
+ * that never exits on its own (e.g. a bare command name that happens to
+ * launch an interactive shell instead of the CLI we expect).
+ */
+export function runCommand(bin: string, args: string[], cwd: string, timeoutMs = 8000): Promise<CommandResult> {
+	return new Promise((resolve) => {
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const finish = (result: CommandResult) => {
+			if (settled) return;
+			settled = true;
+			window.clearTimeout(timer);
+			resolve(result);
+		};
+
+		let child: ChildProcessLike;
+		try {
+			child = spawnProcess(bin, args, { cwd, env: processEnv });
+		} catch (err) {
+			finish({ code: null, stdout: "", stderr: (err as Error).message });
+			return;
+		}
+
+		const timer = window.setTimeout(() => {
+			child.kill("SIGKILL");
+			finish({ code: null, stdout, stderr: stderr + "\n[agent-console] timed out" });
+		}, timeoutMs);
+
+		child.stdout?.on("data", (chunk) => {
+			stdout += chunk.toString("utf8");
+		});
+		child.stderr?.on("data", (chunk) => {
+			stderr += chunk.toString("utf8");
+		});
+		child.on("exit", (code) => finish({ code, stdout, stderr }));
+		child.on("error", (err) => finish({ code: null, stdout, stderr: stderr + err.message }));
+	});
+}
+
+/**
+ * "Is this CLI actually runnable right now" — the plugin's status dots.
+ * Deliberately just `--version`: it's fast, needs no auth/network, and
+ * fails cleanly (non-zero exit, or the spawn itself erroring) for a
+ * binary that doesn't resolve at all. It doesn't confirm the agent is
+ * *authenticated* or that a configured provider is reachable — only that
+ * the executable exists and runs. That's the same bar `resolveBinary`
+ * already needs met to do anything useful, so it's the right bar here too.
+ */
+export async function checkBinaryAvailable(bin: string, cwd: string): Promise<boolean> {
+	const result = await runCommand(bin, ["--version"], cwd, 6000);
+	return result.code === 0;
+}
+
+/**
+ * Lists OpenCode's configured models as `provider/model` strings, via
+ * `opencode models` (opencode.ai/docs/cli — "displays all models available
+ * across your configured providers in the format provider/model"). This
+ * covers local/OpenAI-compatible providers (e.g. an Ollama config) as well
+ * as hosted ones already authenticated via `opencode auth login` — no
+ * `--refresh` flag here, since that re-pulls models.dev's hosted-provider
+ * catalog over the network and isn't needed to see a local provider's
+ * models; the settings UI has its own refresh action for that.
+ *
+ * Returns [] on any failure (binary missing, no providers configured,
+ * timeout) rather than throwing — callers treat an empty list as "nothing
+ * to show", same as a provider with genuinely zero models configured.
+ */
+export async function listOpenCodeModels(bin: string, cwd: string): Promise<string[]> {
+	const result = await runCommand(bin, ["models"], cwd, 15000);
+	if (result.code !== 0) return [];
+	return result.stdout
+		.split("\n")
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0 && line.includes("/"));
+}
