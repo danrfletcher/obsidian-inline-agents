@@ -12,6 +12,12 @@ export interface ModelMapping {
 export interface AgentConsoleSettings {
 	agent: AgentKind;
 	autoApproveDefault: boolean;
+	/** Gates `{{= expr }}` JS expressions in `prompt:` templates (see
+	 * templating.ts). Off by default — an expression evaluates with
+	 * `new Function` against the button's context, which is arbitrary code
+	 * execution scoped to whatever's in that context; same posture
+	 * Dataview takes with its own JS-queries setting. */
+	allowJsExpressions: boolean;
 	claude: { binaryPath: string; models: ModelMapping[] };
 	opencode: { binaryPath: string; models: ModelMapping[] };
 }
@@ -28,6 +34,7 @@ export interface AgentConsoleSettings {
 export const DEFAULT_SETTINGS: AgentConsoleSettings = {
 	agent: "claude",
 	autoApproveDefault: false,
+	allowJsExpressions: false,
 	claude: { binaryPath: "/Users/danfletcher/.local/bin/claude", models: [{ name: "", model: "" }] },
 	opencode: { binaryPath: "opencode", models: [{ name: "", model: "" }] },
 };
@@ -132,6 +139,23 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(this.plugin.settings.autoApproveDefault).onChange(async (value) => {
 					this.plugin.settings.autoApproveDefault = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		new Setting(containerEl)
+			.setName("Allow JavaScript expressions in prompts")
+			.setDesc(
+				'When on, a prompt\'s "{{= expression }}" segments run as real JavaScript (with the button\'s file, ' +
+					"vault, and date context in scope) before the agent sees them — e.g. " +
+					'"{{= file.frontmatter.status === \'draft\' ? \'Finish\' : \'Review\' }}". This is arbitrary code ' +
+					"execution scoped to that context, run whenever a note with such a button is opened and clicked, " +
+					'so it\'s off by default. Plain "{{ file.basename }}"-style lookups always work regardless of this ' +
+					"setting."
+			)
+			.addToggle((toggle) =>
+				toggle.setValue(this.plugin.settings.allowJsExpressions).onChange(async (value) => {
+					this.plugin.settings.allowJsExpressions = value;
 					await this.plugin.saveSettings();
 				})
 			);

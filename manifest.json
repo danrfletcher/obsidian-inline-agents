@@ -1,7 +1,7 @@
 {
 	"id": "inline-agents",
 	"name": "Inline Agents",
-	"version": "0.1.5",
+	"version": "0.2.0",
 	"minAppVersion": "1.13.0",
 	"description": "Turn \"run this workflow\" instructions in a note into a button that fires Claude Code or OpenCode at the note, with a live terminal underneath.",
 	"author": "Dan Fletcher",
