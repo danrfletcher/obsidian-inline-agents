@@ -198,6 +198,16 @@ export function runCommand(bin: string, args: string[], cwd: string, timeoutMs =
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
+		// Declared here (not `const timer = ...` right before its first use,
+		// after the try/catch below) so that if spawnProcess() throws
+		// synchronously, finish()'s window.clearTimeout(timer) call doesn't
+		// hit `timer` while it's still in the temporal dead zone — that used
+		// to throw "Cannot access 'timer' before initialization", which
+		// crashed as an unhandled rejection and left `openCodeModelsLoading`
+		// stuck `true` forever, silently no-op'ing every future refresh.
+		// clearTimeout(undefined) is a safe no-op, so this is correct
+		// whether spawn succeeds or fails.
+		let timer: number | undefined;
 		const finish = (result: CommandResult) => {
 			if (settled) return;
 			settled = true;
@@ -213,7 +223,7 @@ export function runCommand(bin: string, args: string[], cwd: string, timeoutMs =
 			return;
 		}
 
-		const timer = window.setTimeout(() => {
+		timer = window.setTimeout(() => {
 			child.kill("SIGKILL");
 			finish({ code: null, stdout, stderr: stderr + "\n[agent-console] timed out" });
 		}, timeoutMs);
