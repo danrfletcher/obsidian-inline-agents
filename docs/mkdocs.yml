@@ -1,0 +1,64 @@
+site_name: Inline Agents
+site_description: Turn "run this workflow" instructions in an Obsidian note into a button that fires Claude Code or OpenCode, in a live terminal.
+site_url: https://danrfletcher.github.io/obsidian-inline-agents/
+repo_url: https://github.com/danrfletcher/obsidian-inline-agents
+repo_name: danrfletcher/obsidian-inline-agents
+edit_uri: edit/main/docs/docs/
+markdown_extensions:
+  - abbr
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist
+  - tables
+  - toc:
+      permalink: true
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+  logo: assets/favicon.png
+  favicon: assets/favicon-32.png
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+nav:
+  - Overview: 'index.md'
+  - Getting Started:
+      - Installation: 'getting-started/installation.md'
+      - Your First Button: 'getting-started/first-button.md'
+  - Button Reference:
+      - All Fields: 'reference/fields.md'
+      - Completion Modes: 'reference/completion-modes.md'
+      - Captured File Output: 'reference/file-output.md'
+  - Context and Templating:
+      - Lookups and Expressions: 'templating/overview.md'
+      - Context Reference: 'templating/context-reference.md'
+  - Agents and Models:
+      - Claude Code and OpenCode: 'agents/overview.md'
+      - Model Mappings: 'agents/model-mappings.md'
+  - Settings Reference: 'settings.md'
+  - Examples: 'examples.md'
+  - FAQ and Troubleshooting: 'faq.md'
+  - Changelog: 'changelog.md'
+plugins:
+  - search

@@ -1,5 +1,7 @@
 # Inline Agents
 
+📖 **[Full documentation](https://danrfletcher.github.io/obsidian-inline-agents/)**
+
 An Obsidian plugin that turns "run this workflow" instructions in a note into a button. Click it, and it fires Claude Code or OpenCode at the note, in a live terminal right underneath — or, if you'd rather not watch it work, quietly in the background with the result dropped straight into the note when it's done.
 
 Built to replace plain-text "Run `features/learning-artefacts/teacher-artefact-leveller.md`" instructions scattered across a note system with something clickable.
