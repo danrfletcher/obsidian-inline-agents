@@ -7,6 +7,7 @@ import type { AgentRuntime, RuntimeKind } from "./runtime/types";
 import { validateBaseUrl, validateRuntimeName, validateThreadUrlTemplate } from "./runtime/validation";
 import { testConnection } from "./runtime/testConnection";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
+import { removeRuntime } from "./runtime/removeRuntime";
 
 export type { ModelMapping, AgentConsoleSettings } from "./settingsModel";
 export { DEFAULT_SETTINGS, CLAUDE_MODEL_OPTIONS } from "./settingsModel";
@@ -371,16 +372,9 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(() => {
 					void (async () => {
-						// Not deleted from secret storage: the secret is named and
-						// shared across plugins (and SecretStorage exposes no delete
-						// call), so another runtime or plugin may still reference the
-						// same name — removing this runtime only drops its own
-						// reference to that name.
-						const removedName = runtime.name.trim().toLowerCase();
-						this.plugin.settings.runtimes.splice(index, 1);
-						if (this.plugin.settings.defaultTarget.trim().toLowerCase() === removedName) {
-							this.plugin.settings.defaultTarget = "terminal";
-						}
+						removeRuntime(this.plugin.settings, index, {
+							clearSecret: (name) => this.plugin.app.secretStorage.setSecret(name, ""),
+						});
 						await this.plugin.saveSettings();
 						this.display();
 					})();
