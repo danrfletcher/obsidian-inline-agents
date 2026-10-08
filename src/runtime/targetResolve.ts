@@ -93,7 +93,7 @@ export function resolveClickTarget(
 	if (ignored.length > 0) {
 		notices.push(`Ignored for runtime target "${base.runtime.name}": ${ignored.join(", ")}.`);
 	}
-	if (base.runtime.tokenRequired && !secretStore.hasToken(base.runtime.id)) {
+	if (base.runtime.tokenRequired && !secretStore.hasToken(base.runtime.tokenSecretName)) {
 		notices.push(`Token not set on this device for "${base.runtime.name}".`);
 	}
 	return { kind: "runtime", runtime: base.runtime, notices };

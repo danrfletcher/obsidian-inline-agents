@@ -10,6 +10,7 @@ const openclaw: AgentRuntime = {
 	baseUrl: "http://127.0.0.1:18789",
 	agentId: "main",
 	tokenRequired: true,
+	tokenSecretName: "openclaw-secret",
 	sendSessionKeyHeader: false,
 };
 const chatRuntime: AgentRuntime = {
@@ -23,8 +24,9 @@ const chatRuntime: AgentRuntime = {
 };
 const runtimes = [openclaw, chatRuntime];
 
+/** Keyed by secret *name* (tokenSecretName), not runtime id — see runtime/types.ts. */
 function fakeSecretStore(hasToken: Record<string, boolean>): SecretStore {
-	return { hasToken: (id) => hasToken[id] === true };
+	return { hasToken: (name) => (name ? hasToken[name] === true : false) };
 }
 
 test("no target: line silently resolves via the configured default target", () => {
@@ -82,7 +84,7 @@ test("G11: a runtime target with ignored fields set gets a one-line notice namin
 	const result = resolveClickTarget(
 		{ target: "openclaw", model: "sonnet", autoApprove: true },
 		{ runtimes, defaultTarget: "terminal" },
-		fakeSecretStore({ "openclaw-id": true })
+		fakeSecretStore({ "openclaw-secret": true })
 	);
 	assert.equal(result.kind, "runtime");
 	assert.equal(result.notices.length, 1);
@@ -97,9 +99,31 @@ test("E6: a token-required runtime with no token on this device gets a token-mis
 });
 
 test("E6: a token-required runtime with a token present on this device gets no token-missing notice", () => {
-	const result = resolveClickTarget({ target: "openclaw" }, { runtimes, defaultTarget: "terminal" }, fakeSecretStore({ "openclaw-id": true }));
+	const result = resolveClickTarget({ target: "openclaw" }, { runtimes, defaultTarget: "terminal" }, fakeSecretStore({ "openclaw-secret": true }));
 	assert.equal(result.kind, "runtime");
 	assert.deepEqual(result.notices, []);
+});
+
+test("R1: token lookup is keyed by tokenSecretName, not runtime.id — a store entry under the id is ignored", () => {
+	const result = resolveClickTarget(
+		{ target: "openclaw" },
+		{ runtimes, defaultTarget: "terminal" },
+		fakeSecretStore({ "openclaw-id": true })
+	);
+	assert.equal(result.kind, "runtime");
+	assert.equal(result.notices.length, 1);
+	assert.match(result.notices[0], /Token not set on this device for "openclaw"/);
+});
+
+test("R1: a runtime with no tokenSecretName configured is always treated as missing a token", () => {
+	const noSecretName: AgentRuntime = { ...openclaw, tokenSecretName: undefined };
+	const result = resolveClickTarget(
+		{ target: "openclaw" },
+		{ runtimes: [noSecretName], defaultTarget: "terminal" },
+		fakeSecretStore({ "openclaw-secret": true })
+	);
+	assert.equal(result.kind, "runtime");
+	assert.match(result.notices[0], /Token not set on this device for "openclaw"/);
 });
 
 test("a runtime with tokenRequired: false never gets a token-missing notice", () => {

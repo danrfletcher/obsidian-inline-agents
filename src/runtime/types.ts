@@ -10,11 +10,15 @@ export type RuntimeKind = "openclaw-hook" | "openai-chat";
 
 /**
  * A user-configured HTTP agent runtime (settings → "Agent runtimes"). The
- * token itself is never part of this object — it lives in Obsidian's
- * per-device secret storage, keyed by `id` (see SecretStore below).
+ * token itself is never part of this object. Obsidian's secret storage is
+ * shared across plugins and keyed by a *name* the user picks or creates
+ * through the SecretComponent picker (see docs.obsidian.md, "Store
+ * secrets") — `tokenSecretName` holds that name, not the secret, so storing
+ * it in data.json is fine (F5). The actual value is looked up on demand via
+ * `app.secretStorage.getSecret(tokenSecretName)`.
  */
 export interface AgentRuntime {
-	/** Stable id generated once at creation; used as the secret-storage key. Never shown or edited. */
+	/** Stable id generated once at creation. Never shown or edited. */
 	id: string;
 	/** User-visible, unique (case-insensitive) name — what `target: <name>` matches against. */
 	name: string;
@@ -24,6 +28,8 @@ export interface AgentRuntime {
 	agentId: string;
 	/** Whether a missing token on this device blocks a click. Default true. */
 	tokenRequired: boolean;
+	/** Name of the secret in Obsidian's shared secret storage that holds this runtime's token, if one is set. */
+	tokenSecretName?: string;
 	/** Chat kind only: also send the session key as `x-openclaw-session-key`. Default false. */
 	sendSessionKeyHeader: boolean;
 	/** Optional URL used to open the thread; may use {agentId}, {sessionKey}, {sessionKeyPath}. */
@@ -32,7 +38,7 @@ export interface AgentRuntime {
 
 /** Per-device token lookup, abstracted away from Obsidian's actual secretStorage so it's fake-able in tests. */
 export interface SecretStore {
-	hasToken(runtimeId: string): boolean;
+	hasToken(tokenSecretName: string | undefined): boolean;
 }
 
 /** The only shape the runtime module is allowed to build a request from — see httpAdapter.ts for the real implementation. */
