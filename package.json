@@ -3,10 +3,12 @@
 	"version": "0.2.1",
 	"description": "Turn workflow instructions in a note into buttons that run Claude Code or OpenCode, with a live terminal.",
 	"main": "main.js",
+	"type": "module",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"lint": "eslint src/"
+		"lint": "eslint src/",
+		"test": "node --import tsx --test \"tests/unit/**/*.test.ts\""
 	},
 	"keywords": [
 		"obsidian-plugin",
@@ -26,6 +28,7 @@
 		"eslint-plugin-obsidianmd": "^0.4.2",
 		"obsidian": "^1.5.7",
 		"tslib": "2.6.2",
+		"tsx": "^4.23.15",
 		"typescript": "5.4.5"
 	},
 	"dependencies": {
