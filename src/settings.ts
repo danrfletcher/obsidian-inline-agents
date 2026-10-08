@@ -207,7 +207,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 	}
 
 	private hasTokenOnThisDevice(runtime: AgentRuntime): boolean {
-		const value = this.plugin.app.secretStorage.getSecret(runtime.id);
+		if (!runtime.tokenSecretName) return false;
+		const value = this.plugin.app.secretStorage.getSecret(runtime.tokenSecretName);
 		return typeof value === "string" && value.trim() !== "";
 	}
 
@@ -306,15 +307,23 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					: "Stored only in this device's secret storage — never in data.json."
 			);
 		if (runtime.tokenRequired && !hasToken) tokenSetting.settingEl.addClass("agent-console-runtime-token-missing");
-		let pendingTokenValue = "";
 		tokenSetting.addComponent((el) => {
 			const secret = new SecretComponent(this.app, el);
-			secret.setValue(hasToken ? "••••••••" : "");
-			secret.onChange((value) => {
-				pendingTokenValue = value;
-				this.plugin.app.secretStorage.setSecret(runtime.id, value);
-				tokenSetting.settingEl.removeClass("agent-console-runtime-token-missing");
-				tokenSetting.setDesc("Stored only in this device's secret storage — never in data.json.");
+			// SecretComponent's value is the *name* of a secret in Obsidian's
+			// shared secret store, not the secret itself (see runtime/types.ts)
+			// — the picker shows/creates named secrets, so there's no masked
+			// placeholder to fake here the way a plain text token field would need.
+			secret.setValue(runtime.tokenSecretName ?? "");
+			secret.onChange(async (value) => {
+				runtime.tokenSecretName = value.trim();
+				await this.plugin.saveSettings();
+				const nowHasToken = this.hasTokenOnThisDevice(runtime);
+				tokenSetting.settingEl.toggleClass("agent-console-runtime-token-missing", runtime.tokenRequired && !nowHasToken);
+				tokenSetting.setDesc(
+					runtime.tokenRequired && !nowHasToken
+						? "Token required but not set on this device."
+						: "Stored only in this device's secret storage — never in data.json."
+				);
 			});
 			return secret;
 		});
@@ -344,7 +353,9 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				void (async () => {
 					btn.setDisabled(true);
 					testSetting.setDesc("Checking…");
-					const tokenForTest = pendingTokenValue || (this.plugin.app.secretStorage.getSecret(runtime.id) ?? "");
+					const tokenForTest = runtime.tokenSecretName
+						? this.plugin.app.secretStorage.getSecret(runtime.tokenSecretName) ?? ""
+						: "";
 					const result = await testConnection(runtime, tokenForTest, createObsidianHttpFn());
 					testSetting.setDesc(result.message);
 					testSetting.settingEl.toggleClass("agent-console-test-ok", result.ok);
@@ -360,7 +371,11 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(() => {
 					void (async () => {
-						this.plugin.app.secretStorage.setSecret(runtime.id, "");
+						// Not deleted from secret storage: the secret is named and
+						// shared across plugins (and SecretStorage exposes no delete
+						// call), so another runtime or plugin may still reference the
+						// same name — removing this runtime only drops its own
+						// reference to that name.
 						const removedName = runtime.name.trim().toLowerCase();
 						this.plugin.settings.runtimes.splice(index, 1);
 						if (this.plugin.settings.defaultTarget.trim().toLowerCase() === removedName) {
