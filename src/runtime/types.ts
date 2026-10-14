@@ -39,6 +39,12 @@ export interface AgentRuntime {
 /** Per-device token lookup, abstracted away from Obsidian's actual secretStorage so it's fake-able in tests. */
 export interface SecretStore {
 	hasToken(tokenSecretName: string | undefined): boolean;
+	/**
+	 * The actual secret value, read at send time only (F5: never cached in
+	 * module state) — undefined when there's no secret name configured or
+	 * nothing stored under it on this device.
+	 */
+	getToken(tokenSecretName: string | undefined): string | undefined;
 }
 
 /** The only shape the runtime module is allowed to build a request from — see httpAdapter.ts for the real implementation. */
@@ -54,9 +60,15 @@ export interface HttpRequest {
  * underlying transport) is normalized into one of these outcomes before it
  * reaches anything that builds a user-facing message, so there's exactly one
  * place (the adapter) that could ever leak a raw error string.
+ *
+ * `body` (response kind only) carries the raw response text, read once by
+ * the adapter (see httpAdapter.ts) and handled differently per runtime kind
+ * (G15): the hook kind parses it as JSON `{ ok, runId }` via
+ * hookRequest.ts's classifyHookOutcome; the chat kind's classifyChatOutcome
+ * (chatRequest.ts) never reads this field at all.
  */
 export type HttpOutcome =
-	| { kind: "response"; status: number }
+	| { kind: "response"; status: number; body?: string }
 	| { kind: "timeout" }
 	| { kind: "refused" }
 	| { kind: "error"; reason: string };
