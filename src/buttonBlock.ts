@@ -14,9 +14,23 @@ import { parseButtonBlock, resolveModel, AgentOutputTarget, CompletionMode } fro
 import { resolveClickTarget } from "./runtime/targetResolve";
 import { runClickDecision } from "./runtime/clickRouting";
 import { createSecretStoreAdapter } from "./runtime/secretStoreAdapter";
+import { createHandoffRunner, createSingleFlightHandoff } from "./runtime/handoff";
+import { createObsidianHttpFn } from "./runtime/httpAdapter";
+import { HOOK_TIMEOUT_MS } from "./runtime/hookRequest";
+import { CHAT_HTTP_TIMEOUT_MS } from "./runtime/chatRequest";
+
+/** `<vault base path>/<vault-relative source path>` — the absolute path that goes on the hand-off message's last "Note:" line (G7). Vault-relative paths always use "/" regardless of OS. */
+function toAbsoluteNotePath(vaultBasePath: string, sourcePath: string): string {
+	return `${vaultBasePath.replace(/[\\/]+$/, "")}/${sourcePath}`;
+}
 
 export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 	const secretStore = createSecretStoreAdapter(plugin.app);
+	// One runner for the plugin's whole lifetime, shared by every
+	// agent-button block — see handoff.ts: that's what makes E5's "no
+	// thread URL" notice genuinely once per Obsidian session rather than
+	// once per block.
+	const handoffRunner = createHandoffRunner();
 
 	plugin.registerMarkdownCodeBlockProcessor("agent-button", (source, el, ctx) => {
 		const spec = parseButtonBlock(source);
@@ -26,7 +40,14 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 		const buttonLabel = button.createSpan({ cls: "agent-console-button-label", text: spec.text });
 		button.createSpan({ cls: "agent-console-spinner" });
 		button.createSpan({ cls: "agent-console-pencil", text: "✏️" });
-		void buttonLabel;
+		// G9: the "↗" affordance for a settled hand-off with a thread-URL
+		// template — a separate clickable element from the button itself so
+		// clicking it opens the thread (on demand, any time after settling)
+		// without re-triggering a new hand-off, which is what clicking the
+		// button's own body does (G10).
+		const threadLink = button.createEl("a", { cls: "agent-console-thread-link", text: "↗" });
+		threadLink.setAttr("href", "#");
+		threadLink.setCssStyles({ display: "none" });
 
 		// Manual-completion affordance: hidden unless a run is live under
 		// completion: manual. Clicking it kills the child process, which
@@ -95,6 +116,123 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			});
 		};
 
+		// The entire pre-PR-1.F1 click body — sessionAlive check, accordion,
+		// ensureTerm, spawn, all of it — unchanged. Also reused directly as
+		// the runtime flow's fallback-to-terminal (G12/E2/E3/E4/E6/E12):
+		// every failure before a hand-off is accepted runs the button
+		// exactly as if `target:` had been `terminal` all along.
+		const runTerminalFlow = () => {
+			if (sessionAlive) {
+				setAccordionOpen(true);
+				return;
+			}
+			sessionAlive = true;
+			setVisualState("running");
+			toggle.setCssStyles({ display: "block" });
+
+			const showTerminal = spec.showTerminal ?? true;
+			setAccordionOpen(showTerminal);
+			ensureTerm();
+			term?.clear();
+
+			// Snapshot where this block sits in the note right now — used by
+			// agentOutput: file / append: belowButton once the run finishes.
+			// See writeAgentOutputToFile's docstring for why this is only a
+			// best-effort anchor.
+			sectionInfo = ctx.getSectionInfo(wrapper);
+
+			const settings = plugin.settings;
+			const agentKind: AgentKind = spec.agent ?? settings.agent;
+			const autoApprove = spec.autoApprove ?? settings.autoApproveDefault;
+			const model = resolveModel(spec.model, agentKind === "opencode" ? settings.opencode.models : settings.claude.models);
+			const agentOutput: AgentOutputTarget = spec.agentOutput ?? "terminal";
+			const appendPosition: AppendPosition = spec.append ?? "bottom";
+			const completion: CompletionMode = spec.completion ?? "manual";
+			setCompleteBtnVisible(completion === "manual");
+
+			let cwd: string;
+			try {
+				cwd = plugin.getVaultBasePath();
+			} catch (err) {
+				term?.write(`\r\n\x1b[31m[agent-console] ${(err as Error).message}\x1b[0m\r\n`);
+				sessionAlive = false;
+				setVisualState("idle");
+				setCompleteBtnVisible(false);
+				return;
+			}
+			const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
+			const rendered = renderPromptTemplate(spec.prompt, context, { allowJs: settings.allowJsExpressions });
+			if (rendered.error) {
+				term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
+				sessionAlive = false;
+				setVisualState("idle");
+				setCompleteBtnVisible(false);
+				return;
+			}
+			const prompt = rendered.text;
+			// The configured path is a preference, not a guarantee — this same
+			// data.json is shared between Dan's real Mac and the desktop-obsidian
+			// container, and a path valid in one is usually wrong in the other.
+			// resolveBinary() falls through known install locations, then bare
+			// PATH lookup, so one vault works in both without hand-editing settings
+			// every time it's opened somewhere else.
+			const configuredPath = agentKind === "opencode" ? settings.opencode.binaryPath : settings.claude.binaryPath;
+			const resolvedBinary =
+				agentKind === "opencode"
+					? resolveBinary(configuredPath, "opencode", OPENCODE_CANDIDATES)
+					: resolveBinary(configuredPath, "claude", CLAUDE_CANDIDATES);
+			const built = buildAgentCommand(agentKind, resolvedBinary, { prompt, cwd, autoApprove, model });
+
+			term?.write(
+				`\x1b[2m$ ${built.bin} ${built.args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}\x1b[0m\r\n\r\n`
+			);
+
+			handle = spawnAgentProcess(built.bin, built.args, cwd);
+			handle.onData((chunk) => {
+				term?.write(chunk, () => {
+					if (completion !== "responseEnd" || !term) return;
+					const state = classifyTurnState(term);
+					if (state === "awaiting-input") setVisualState("awaiting-input");
+					else if (state === "idle-done") setVisualState("idle");
+					else setVisualState("running");
+				});
+			});
+			handle.onExit((code) => {
+				sessionAlive = false;
+				setVisualState("idle");
+				setCompleteBtnVisible(false);
+				term?.write(`\r\n\x1b[2m[agent-console] process exited (code ${code ?? "unknown"})\x1b[0m\r\n`);
+
+				if (agentOutput === "file" && term) {
+					const clean = extractCleanText(term);
+					if (clean) {
+						writeAgentOutputToFile(plugin.app, ctx.sourcePath, spec.text, clean, appendPosition, sectionInfo).catch(
+							(err) => {
+								term?.write(
+									`\r\n\x1b[31m[agent-console] Failed to write output to file: ${(err as Error).message}\x1b[0m\r\n`
+								);
+							}
+						);
+					}
+				}
+			});
+		};
+
+		// G7/E10: one single-flight wrapper per block — a second click while
+		// this block's own hand-off is still in flight is ignored outright.
+		// Not shared across blocks (unlike handoffRunner itself), since the
+		// one-at-a-time rule is per button, not per runtime (see handoff.ts).
+		const sendHandoff = createSingleFlightHandoff(handoffRunner.runHandoff);
+
+		threadLink.addEventListener("click", (evt) => {
+			// Opening the already-settled thread on demand must never count
+			// as a new click on the button itself (G10: every click on the
+			// button starts a new thread; this is "open the one we already
+			// have").
+			evt.stopPropagation();
+			evt.preventDefault();
+		});
+
 		button.addEventListener("click", () => {
 			// Resolved before any terminal set-up (sessionAlive check,
 			// accordion, ensureTerm) — a runtime target must never flash a
@@ -104,109 +242,65 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			resolution.notices.forEach((notice) => new Notice(notice));
 
 			runClickDecision(resolution, {
-				runTerminalFlow: () => {
-					if (sessionAlive) {
-						setAccordionOpen(true);
-						return;
-					}
-					sessionAlive = true;
-					setVisualState("running");
-					toggle.setCssStyles({ display: "block" });
-
-					const showTerminal = spec.showTerminal ?? true;
-					setAccordionOpen(showTerminal);
-					ensureTerm();
-					term?.clear();
-
-					// Snapshot where this block sits in the note right now — used by
-					// agentOutput: file / append: belowButton once the run finishes.
-					// See writeAgentOutputToFile's docstring for why this is only a
-					// best-effort anchor.
-					sectionInfo = ctx.getSectionInfo(wrapper);
-
-					const settings = plugin.settings;
-					const agentKind: AgentKind = spec.agent ?? settings.agent;
-					const autoApprove = spec.autoApprove ?? settings.autoApproveDefault;
-					const model = resolveModel(
-						spec.model,
-						agentKind === "opencode" ? settings.opencode.models : settings.claude.models
-					);
-					const agentOutput: AgentOutputTarget = spec.agentOutput ?? "terminal";
-					const appendPosition: AppendPosition = spec.append ?? "bottom";
-					const completion: CompletionMode = spec.completion ?? "manual";
-					setCompleteBtnVisible(completion === "manual");
-
+				runTerminalFlow,
+				runRuntimeFlow: (runtime) => {
 					let cwd: string;
 					try {
 						cwd = plugin.getVaultBasePath();
 					} catch (err) {
-						term?.write(`\r\n\x1b[31m[agent-console] ${(err as Error).message}\x1b[0m\r\n`);
-						sessionAlive = false;
-						setVisualState("idle");
-						setCompleteBtnVisible(false);
+						new Notice((err as Error).message);
 						return;
 					}
 					const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
-					const rendered = renderPromptTemplate(spec.prompt, context, { allowJs: settings.allowJsExpressions });
+					const rendered = renderPromptTemplate(spec.prompt, context, {
+						allowJs: plugin.settings.allowJsExpressions,
+					});
 					if (rendered.error) {
-						term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
-						sessionAlive = false;
-						setVisualState("idle");
-						setCompleteBtnVisible(false);
+						new Notice(rendered.error);
 						return;
 					}
-					const prompt = rendered.text;
-					// The configured path is a preference, not a guarantee — this same
-					// data.json is shared between Dan's real Mac and the desktop-obsidian
-					// container, and a path valid in one is usually wrong in the other.
-					// resolveBinary() falls through known install locations, then bare
-					// PATH lookup, so one vault works in both without hand-editing settings
-					// every time it's opened somewhere else.
-					const configuredPath = agentKind === "opencode" ? settings.opencode.binaryPath : settings.claude.binaryPath;
-					const resolvedBinary =
-						agentKind === "opencode"
-							? resolveBinary(configuredPath, "opencode", OPENCODE_CANDIDATES)
-							: resolveBinary(configuredPath, "claude", CLAUDE_CANDIDATES);
-					const built = buildAgentCommand(agentKind, resolvedBinary, { prompt, cwd, autoApprove, model });
 
-					term?.write(
-						`\x1b[2m$ ${built.bin} ${built.args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}\x1b[0m\r\n\r\n`
-					);
-
-					handle = spawnAgentProcess(built.bin, built.args, cwd);
-					handle.onData((chunk) => {
-						term?.write(chunk, () => {
-							if (completion !== "responseEnd" || !term) return;
-							const state = classifyTurnState(term);
-							if (state === "awaiting-input") setVisualState("awaiting-input");
-							else if (state === "idle-done") setVisualState("idle");
-							else setVisualState("running");
-						});
-					});
-					handle.onExit((code) => {
-						sessionAlive = false;
-						setVisualState("idle");
-						setCompleteBtnVisible(false);
-						term?.write(`\r\n\x1b[2m[agent-console] process exited (code ${code ?? "unknown"})\x1b[0m\r\n`);
-
-						if (agentOutput === "file" && term) {
-							const clean = extractCleanText(term);
-							if (clean) {
-								writeAgentOutputToFile(
-									plugin.app,
-									ctx.sourcePath,
-									spec.text,
-									clean,
-									appendPosition,
-									sectionInfo
-								).catch((err) => {
-									term?.write(
-										`\r\n\x1b[31m[agent-console] Failed to write output to file: ${(err as Error).message}\x1b[0m\r\n`
-									);
-								});
-							}
+					void sendHandoff(
+						{
+							runtime,
+							agentIdOverride: spec.agentId,
+							prompt: rendered.text,
+							notePath: toAbsoluteNotePath(cwd, ctx.sourcePath),
+							noteBasename: context.file.basename,
+							openRequested: spec.open ?? plugin.settings.defaultOpen,
+							token: secretStore.getToken(runtime.tokenSecretName),
+						},
+						{
+							httpFn: createObsidianHttpFn(runtime.kind === "openclaw-hook" ? HOOK_TIMEOUT_MS : CHAT_HTTP_TIMEOUT_MS),
+							nowMs: () => Date.now(),
+							openUrl: (url) => window.open(url),
+							notify: (message) => new Notice(message),
+							onSending: () => {
+								button.disabled = true;
+								threadLink.setCssStyles({ display: "none" });
+								buttonLabel.setText(`Sending to ${runtime.name}…`);
+							},
+							onSent: (threadUrl) => {
+								button.disabled = false;
+								buttonLabel.setText(`Sent to ${runtime.name}`);
+								if (threadUrl) {
+									threadLink.setAttr("href", threadUrl);
+									threadLink.setCssStyles({ display: "inline" });
+								} else {
+									threadLink.setCssStyles({ display: "none" });
+								}
+							},
+							// G12: every failure before the hand-off is accepted
+							// runs the button exactly as target: terminal would —
+							// see runTerminalFlow above.
+							fallbackToTerminal: () => {
+								button.disabled = false;
+								buttonLabel.setText(spec.text);
+								threadLink.setCssStyles({ display: "none" });
+								runTerminalFlow();
+							},
 						}
-					});
+					);
 				},
 			});
 		});

@@ -62,6 +62,17 @@
 	display: none;
 }
 
+/* G9: the "↗" affordance for a settled runtime hand-off with a thread-URL
+   template. Hidden by default (see buttonBlock.ts); shown inline once the
+   hand-off settles with a thread URL to open on demand. A real link, not
+   just styled text, so it keeps its own click target separate from the
+   button's own click (which would start a new hand-off, G10). */
+.agent-console-thread-link {
+	display: none;
+	margin-left: 0.15em;
+	text-decoration: none;
+}
+
 /* completion: manual's "kill the session and finish up" affordance, next
    to the main button rather than inside it. */
 .agent-console-complete-btn {
