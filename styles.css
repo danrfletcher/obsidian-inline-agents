@@ -281,6 +281,31 @@
 	color: var(--text-error);
 }
 
+/* --- Settings: agent runtimes --- */
+.agent-console-runtime-list {
+	margin-bottom: 0.5em;
+}
+
+.agent-console-runtime-card {
+	margin: 0.75em 0;
+	padding: 0.6em 0.8em;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	background: var(--background-secondary);
+}
+
+.agent-console-runtime-token-missing {
+	--text-muted: var(--text-warning, var(--text-error));
+}
+
+.agent-console-test-ok .setting-item-description {
+	color: var(--color-green);
+}
+
+.agent-console-test-fail .setting-item-description {
+	color: var(--color-red);
+}
+
 /* --- xterm.js base styles (vendored from @xterm/xterm) --- */
 /**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.

@@ -1,65 +1,16 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting, SecretComponent } from "obsidian";
 import type AgentConsolePlugin from "./main";
 import type { AgentKind } from "./agents";
 import { checkBinaryAvailable, listOpenCodeModels, resolveBinary, CLAUDE_CANDIDATES, OPENCODE_CANDIDATES } from "./runner";
+import { CLAUDE_MODEL_OPTIONS } from "./settingsModel";
+import type { AgentRuntime, RuntimeKind } from "./runtime/types";
+import { validateBaseUrl, validateRuntimeName, validateThreadUrlTemplate } from "./runtime/validation";
+import { testConnection } from "./runtime/testConnection";
+import { createObsidianHttpFn } from "./runtime/httpAdapter";
+import { removeRuntime } from "./runtime/removeRuntime";
 
-/** One `model:` shortcut a button can reference by `name`. See resolveModel() in buttonBlock.ts. */
-export interface ModelMapping {
-	name: string;
-	model: string;
-}
-
-export interface AgentConsoleSettings {
-	agent: AgentKind;
-	autoApproveDefault: boolean;
-	/** Gates `{{= expr }}` JS expressions in `prompt:` templates (see
-	 * templating.ts). Off by default — an expression evaluates with
-	 * `new Function` against the button's context, which is arbitrary code
-	 * execution scoped to whatever's in that context; same posture
-	 * Dataview takes with its own JS-queries setting. */
-	allowJsExpressions: boolean;
-	claude: { binaryPath: string; models: ModelMapping[] };
-	opencode: { binaryPath: string; models: ModelMapping[] };
-}
-
-// Prefilled with what setup found live on this Mac (2026-08-31):
-// `/Users/danfletcher/.local/bin/claude` confirmed working (`claude
-// --version` → 2.1.207); `opencode` installed globally via npm
-// (`opencode-ai`) — bare name resolves via PATH. Note: this same
-// data.json is also read inside the `desktop-obsidian` container, where
-// neither of these paths is correct — src/runner.ts's resolveBinary()
-// falls through known container install locations (and finally bare PATH
-// lookup) whenever the configured path doesn't exist on disk, so one vault
-// works in both places without needing to be reconfigured each time.
-export const DEFAULT_SETTINGS: AgentConsoleSettings = {
-	agent: "claude",
-	autoApproveDefault: false,
-	allowJsExpressions: false,
-	claude: { binaryPath: "/Users/danfletcher/.local/bin/claude", models: [{ name: "", model: "" }] },
-	opencode: { binaryPath: "opencode", models: [{ name: "", model: "" }] },
-};
-
-/**
- * Claude Code has no CLI command to list its own available models live —
- * unlike OpenCode's `models` subcommand (see runner.ts's
- * listOpenCodeModels), there's nothing to query. This is a curated static
- * list of the aliases/IDs `claude --model` itself documents accepting
- * (`claude --help`, checked live 2026-08-31), kept here rather than
- * invented — it'll drift as Anthropic ships new models, but a stale list
- * is still useful as a starting point, and the model-mapping row's field
- * is always a free-text input, so any current model string can be typed
- * or pasted in regardless of whether it's in this list.
- */
-export const CLAUDE_MODEL_OPTIONS = [
-	"sonnet",
-	"opus",
-	"fable",
-	"haiku",
-	"claude-sonnet-5",
-	"claude-opus-5",
-	"claude-fable-5",
-	"claude-haiku-4-5-20251001",
-];
+export type { ModelMapping, AgentConsoleSettings } from "./settingsModel";
+export { DEFAULT_SETTINGS, CLAUDE_MODEL_OPTIONS } from "./settingsModel";
 
 type ProviderKey = "claude" | "opencode";
 type ConnectionStatus = "checking" | "connected" | "disconnected";
@@ -160,6 +111,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				})
 			);
 
+		this.renderRuntimesSection(containerEl);
+
 		this.renderProviderSection(containerEl, {
 			key: "claude",
 			title: "Claude Code",
@@ -187,6 +140,246 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			getModelOptions: () => this.openCodeModelCache,
 			modelPlaceholder: "model string, e.g. ollama/qwen3.8:27b-mlx",
 		});
+	}
+
+	/**
+	 * G1/G2/G3/G4: the "Agent runtimes" list, the "Default target"/"open"
+	 * defaults, and per-row "Test connection". No reordering — rows render
+	 * in array order and the only way to change position is remove + re-add.
+	 */
+	private renderRuntimesSection(containerEl: HTMLElement): void {
+		new Setting(containerEl).setName("Agent runtimes").setHeading();
+
+		const defaultTargetSetting = new Setting(containerEl)
+			.setName("Default target")
+			.setDesc(
+				"Where a button goes when its \"target:\" line is missing, or names a runtime that no longer exists. " +
+					'The toggle is the default for a button\'s "open:" line.'
+			);
+		defaultTargetSetting.addDropdown((dropdown) => {
+			dropdown.addOption("terminal", "Terminal");
+			for (const runtime of this.plugin.settings.runtimes) {
+				if (runtime.name.trim()) dropdown.addOption(runtime.name, runtime.name);
+			}
+			const current = this.plugin.settings.defaultTarget;
+			const resolvedValue =
+				current.toLowerCase() === "terminal"
+					? "terminal"
+					: this.plugin.settings.runtimes.find((r) => r.name.toLowerCase() === current.toLowerCase())?.name ??
+						"terminal";
+			dropdown.setValue(resolvedValue);
+			dropdown.onChange(async (value) => {
+				this.plugin.settings.defaultTarget = value;
+				await this.plugin.saveSettings();
+			});
+		});
+		defaultTargetSetting.addToggle((toggle) =>
+			toggle.setValue(this.plugin.settings.defaultOpen).onChange(async (value) => {
+				this.plugin.settings.defaultOpen = value;
+				await this.plugin.saveSettings();
+			})
+		);
+
+		const listEl = containerEl.createDiv({ cls: "agent-console-runtime-list" });
+		this.plugin.settings.runtimes.forEach((_, index) => this.renderRuntimeRow(listEl, index));
+
+		new Setting(containerEl).addButton((btn) =>
+			btn
+				.setButtonText("Add runtime")
+				.setCta()
+				.onClick(() => {
+					void (async () => {
+						const runtime: AgentRuntime = {
+							id: crypto.randomUUID(),
+							name: "",
+							kind: "openclaw-hook",
+							baseUrl: "",
+							agentId: "",
+							tokenRequired: true,
+							sendSessionKeyHeader: false,
+							threadUrlTemplate: "",
+						};
+						this.plugin.settings.runtimes.push(runtime);
+						await this.plugin.saveSettings();
+						this.display();
+					})();
+				})
+		);
+	}
+
+	private hasTokenOnThisDevice(runtime: AgentRuntime): boolean {
+		if (!runtime.tokenSecretName) return false;
+		const value = this.plugin.app.secretStorage.getSecret(runtime.tokenSecretName);
+		return typeof value === "string" && value.trim() !== "";
+	}
+
+	private renderRuntimeRow(listEl: HTMLElement, index: number): void {
+		const runtime = this.plugin.settings.runtimes[index];
+		const card = listEl.createDiv({ cls: "agent-console-runtime-card" });
+
+		const nameSetting = new Setting(card).setName("Name").setDesc('Matched case-insensitively against a button\'s "target:" line.');
+		nameSetting.addText((text) =>
+			text
+				.setPlaceholder("openclaw")
+				.setValue(runtime.name)
+				.onChange(async (value) => {
+					const result = validateRuntimeName(value, this.plugin.settings.runtimes, index);
+					if (!result.ok) {
+						nameSetting.setErrorMessage(result.reason);
+						return;
+					}
+					nameSetting.setErrorMessage(null);
+					runtime.name = value.trim();
+					await this.plugin.saveSettings();
+				})
+		);
+
+		new Setting(card)
+			.setName("Kind")
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ "openclaw-hook": "OpenClaw hook", "openai-chat": "OpenAI-compatible chat" })
+					.setValue(runtime.kind)
+					.onChange(async (value) => {
+						runtime.kind = value as RuntimeKind;
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+
+		const baseUrlSetting = new Setting(card).setName("Base URL");
+		baseUrlSetting.addText((text) =>
+			text
+				.setPlaceholder("http://127.0.0.1:18789")
+				.setValue(runtime.baseUrl)
+				.onChange(async (value) => {
+					const result = validateBaseUrl(value);
+					if (!result.ok) {
+						baseUrlSetting.setErrorMessage(result.reason);
+						return;
+					}
+					baseUrlSetting.setErrorMessage(null);
+					runtime.baseUrl = value.trim();
+					await this.plugin.saveSettings();
+				})
+		);
+
+		new Setting(card)
+			.setName("Agent ID or model")
+			.setDesc('Overridable per button with "agentId:".')
+			.addText((text) =>
+				text
+					.setPlaceholder(runtime.kind === "openclaw-hook" ? "main" : "gpt-4o")
+					.setValue(runtime.agentId)
+					.onChange(async (value) => {
+						runtime.agentId = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		new Setting(card)
+			.setName("Token required")
+			.setDesc("Block a click with a notice if no token is stored on this device.")
+			.addToggle((toggle) =>
+				toggle.setValue(runtime.tokenRequired).onChange(async (value) => {
+					runtime.tokenRequired = value;
+					await this.plugin.saveSettings();
+				})
+			);
+
+		if (runtime.kind === "openai-chat") {
+			new Setting(card)
+				.setName("Send session key as x-openclaw-session-key")
+				.setDesc("Turn this on if this chat endpoint is OpenClaw's.")
+				.addToggle((toggle) =>
+					toggle.setValue(runtime.sendSessionKeyHeader).onChange(async (value) => {
+						runtime.sendSessionKeyHeader = value;
+						await this.plugin.saveSettings();
+					})
+				);
+		}
+
+		const hasToken = this.hasTokenOnThisDevice(runtime);
+		const tokenSetting = new Setting(card)
+			.setName("Token")
+			.setDesc(
+				runtime.tokenRequired && !hasToken
+					? "Token required but not set on this device."
+					: "Stored only in this device's secret storage — never in data.json."
+			);
+		if (runtime.tokenRequired && !hasToken) tokenSetting.settingEl.addClass("agent-console-runtime-token-missing");
+		tokenSetting.addComponent((el) => {
+			const secret = new SecretComponent(this.app, el);
+			// SecretComponent's value is the *name* of a secret in Obsidian's
+			// shared secret store, not the secret itself (see runtime/types.ts)
+			// — the picker shows/creates named secrets, so there's no masked
+			// placeholder to fake here the way a plain text token field would need.
+			secret.setValue(runtime.tokenSecretName ?? "");
+			secret.onChange(async (value) => {
+				runtime.tokenSecretName = value.trim();
+				await this.plugin.saveSettings();
+				const nowHasToken = this.hasTokenOnThisDevice(runtime);
+				tokenSetting.settingEl.toggleClass("agent-console-runtime-token-missing", runtime.tokenRequired && !nowHasToken);
+				tokenSetting.setDesc(
+					runtime.tokenRequired && !nowHasToken
+						? "Token required but not set on this device."
+						: "Stored only in this device's secret storage — never in data.json."
+				);
+			});
+			return secret;
+		});
+
+		const threadUrlSetting = new Setting(card)
+			.setName("Thread-URL template")
+			.setDesc("Optional. May use {agentId}, {sessionKey}, {sessionKeyPath}.");
+		threadUrlSetting.addText((text) =>
+			text
+				.setPlaceholder("https://example.com/threads/{sessionKey}")
+				.setValue(runtime.threadUrlTemplate ?? "")
+				.onChange(async (value) => {
+					const result = validateThreadUrlTemplate(value);
+					if (!result.ok) {
+						threadUrlSetting.setErrorMessage(result.reason);
+						return;
+					}
+					threadUrlSetting.setErrorMessage(null);
+					runtime.threadUrlTemplate = value.trim();
+					await this.plugin.saveSettings();
+				})
+		);
+
+		const testSetting = new Setting(card).setName("Test connection").setDesc("Checks reachability and the token — never sends a prompt.");
+		testSetting.addButton((btn) =>
+			btn.setButtonText("Test connection").onClick(() => {
+				void (async () => {
+					btn.setDisabled(true);
+					testSetting.setDesc("Checking…");
+					const tokenForTest = runtime.tokenSecretName
+						? this.plugin.app.secretStorage.getSecret(runtime.tokenSecretName) ?? ""
+						: "";
+					const result = await testConnection(runtime, tokenForTest, createObsidianHttpFn());
+					testSetting.setDesc(result.message);
+					testSetting.settingEl.toggleClass("agent-console-test-ok", result.ok);
+					testSetting.settingEl.toggleClass("agent-console-test-fail", !result.ok);
+					btn.setDisabled(false);
+				})();
+			})
+		);
+
+		new Setting(card).addButton((btn) =>
+			btn
+				.setButtonText("Remove")
+				.setWarning()
+				.onClick(() => {
+					void (async () => {
+						removeRuntime(this.plugin.settings, index, {
+							clearSecret: (name) => this.plugin.app.secretStorage.setSecret(name, ""),
+						});
+						await this.plugin.saveSettings();
+						this.display();
+					})();
+				})
+		);
 	}
 
 	private resolvedBinary(key: ProviderKey): string {
