@@ -24,6 +24,18 @@ Check that the mapping `name` you typed matches one configured under the **agent
 
 That means the *root* name wasn't recognized (a typo like `{{flie.basename}}`) — this is deliberate, so the mistake stays visible rather than silently vanishing. Check the spelling against the [Context Reference](templating/context-reference.md). A *missing* value under a real root (e.g. no frontmatter `status` field) renders as an empty string instead, which looks different from this case.
 
+## A `target:` runtime button fell back to the terminal instead of sending
+
+Every fallback shows a notice naming the reason, then runs the button in the terminal exactly as if `target:` had been `terminal` all along — see [Agent Runtimes](agents/runtimes.md#falling-back-to-the-terminal) for the full detail. Quick reference:
+
+| Notice | Fix |
+|---|---|
+| `Unknown target "<name>" — running the default target instead.` | The `target:` name doesn't match any configured runtime — check **Agent runtimes** in Settings, or fix the typo in the button. |
+| `<name> isn't reachable, running here` | The runtime's HTTP server isn't running, or isn't reachable at its configured base URL — start/check it there, outside Obsidian. |
+| `token rejected` | The token Settings has for this runtime, on this device, was rejected (401/403) — re-enter the correct one. |
+| `Token not set on this device for "<name>".` | No token is stored for this runtime on this device — settings synced from elsewhere carry the runtime's configuration but never its token; enter it in Settings here. |
+| `OpenClaw rejected the session key: enable allowRequestSessionKey and allow the inline: prefix` | On the OpenClaw side, turn on `allowRequestSessionKey` and add `"inline:"` to `allowedSessionKeyPrefixes`. |
+
 ## The plugin needs `python3` — is that a problem?
 
 The terminal is allocated via `python3 -c "import pty,sys; pty.spawn(sys.argv[1:])"` rather than a native `node-pty` build, specifically to avoid needing a fresh native prebuild every time Obsidian's bundled Electron version changes. This needs a `python3` at one of a few standard locations, or on `PATH` — true on basically any Mac or Linux environment already. If it's genuinely missing, install Python 3 for your OS and it'll be picked up.

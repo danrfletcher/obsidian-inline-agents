@@ -2,7 +2,7 @@
 
 📖 **[Full documentation](https://danrfletcher.github.io/obsidian-inline-agents/)**
 
-An Obsidian plugin that turns "run this workflow" instructions in a note into a button. Click it, and it fires Claude Code or OpenCode at the note, in a live terminal right underneath — or, if you'd rather not watch it work, quietly in the background with the result dropped straight into the note when it's done.
+An Obsidian plugin that turns "run this workflow" instructions in a note into a button. Click it, and it fires Claude Code or OpenCode at the note, in a live terminal right underneath — or, if you'd rather not watch it work, quietly in the background with the result dropped straight into the note when it's done. A button can also hand its prompt off to an HTTP **agent runtime** (OpenClaw, Hermes Agent, or any OpenAI-compatible endpoint) instead, so the work runs as an agent thread there and the resulting thread opens — see [Agent runtimes](#agent-runtimes) below.
 
 Built to replace plain-text "Run `features/learning-artefacts/teacher-artefact-leveller.md`" instructions scattered across a note system with something clickable.
 
@@ -59,6 +59,9 @@ Every field except `text` and `prompt` is optional and falls back to a sensible 
   - `true` — the terminal appears in place immediately, as it always has.
   - `false` — the terminal stays collapsed; only the "Show terminal" toggle appears below the button, so you can open it on demand without it popping open every time.
 - **`completion`** (`responseEnd`/`manual`, default `manual`) — how the button's loading state is resolved. See below.
+- **`target`** (`terminal`/a configured agent runtime's name, default from settings' **Default target**) — where the click goes: the inline terminal (`terminal`, the same behaviour as every version before this), or an HTTP **agent runtime** configured in Settings. See [Agent runtimes](#agent-runtimes) below.
+- **`open`** (`true`/`false`, default from settings) — runtime targets only: whether the thread opens automatically once the hand-off settles.
+- **`agentId`** (optional) — runtime targets only: overrides the runtime's configured agent id or model for this one button.
 
 ### Completion modes
 
@@ -125,7 +128,33 @@ When `agentOutput: file` is set, the plugin renders the full xterm buffer to pla
 
 This captures the whole visible session transcript (tool-call summaries included, not just the agent's final reply) rather than attempting to isolate "the assistant's message" specifically — doing real semantic extraction of just the reply would need much deeper, CLI-specific knowledge of each agent's exact output format than is safe to assume here. It's good enough to drop into a note as a record of the run; it isn't a guarantee of a perfectly clean, chrome-free transcript in every case, especially for CLIs whose output this hasn't been tuned against.
 
-Settings (gear icon → Inline Agents): the Default Agent used when a button does not specify `agent:`, each agent's binary path and connection status, each agent's model mappings (see [Model selection](#model-selection) above), the default auto-approve toggle, and whether `{{= }}` expressions in prompts are allowed to run (see [Context and templating](#context-and-templating) above).
+Settings (gear icon → Inline Agents): the Default Agent used when a button does not specify `agent:`, each agent's binary path and connection status, each agent's model mappings (see [Model selection](#model-selection) above), the default auto-approve toggle, whether `{{= }}` expressions in prompts are allowed to run (see [Context and templating](#context-and-templating) above), and the **Agent runtimes** list (see below).
+
+### Agent runtimes
+
+A button's `target:` can send its prompt to an HTTP **agent runtime** instead of the inline terminal — the work runs as an agent thread on that runtime, keeps going there (for the OpenClaw hook kind) when Obsidian closes, and the thread opens. Two kinds ship:
+
+- **OpenClaw hook** — `POST <base>/hooks/agent`, asynchronous; the run survives Obsidian closing. OpenClaw must have `hooks.enabled`, `allowRequestSessionKey: true` and `allowedSessionKeyPrefixes: ["inline:"]` set, since every session key this plugin sends starts with `inline:`. OpenClaw treats the hook's text as **untrusted external content**, the same as any other inbound message.
+
+  ```
+  target: openclaw   # runtime "openclaw": kind OpenClaw hook, base URL http://127.0.0.1:18789, agent "main"
+  ```
+
+- **OpenAI-compatible chat** — `POST <base>/chat/completions`, a normal user turn; covers Hermes Agent and most other OpenAI-compatible servers. The run lasts only while Obsidian stays open — a dropped connection cancels it.
+
+  ```
+  target: hermes      # runtime "hermes": kind OpenAI-compatible chat, API server http://127.0.0.1:8642/v1
+  ```
+
+Settings → Inline Agents → **Agent runtimes** has a list of runtimes (name, kind, base URL, agent id/model, "token required", a "send session key as `x-openclaw-session-key`" box for the chat kind, token, and an optional thread-URL template using `{agentId}`, `{sessionKey}`, `{sessionKeyPath}`), a **Default target** dropdown (Terminal plus every runtime name), a default for `open`, and a per-runtime **Test connection** button. A thread-URL template may use `http`, `https`, or any custom URL scheme a runtime's own app handles (so Hermes' desktop app, for example, can open directly) — except `file`, `javascript`, `data` and `vbscript`, which are never allowed.
+
+A runtime target is **fire-and-forget**: no reply streams into the note, no run state is tracked, and `model`, `autoApprove`, `agentOutput`, `completion` and `showTerminal` are all ignored (with a one-line notice naming whichever ones the button set). Reading the reply, continuing the thread and any approvals all happen on the runtime, not in Obsidian. Every click starts a brand-new thread. If the runtime is unknown, unreachable, rejects the token, or (OpenClaw) rejects the session key, a notice names the reason and the button runs in the inline terminal instead, exactly as if `target:` had been `terminal`.
+
+A runtime's token is kept in **Obsidian's own per-device secret storage** — never in `data.json`, a note, or a log. A second device has to enter it again. The token field in Settings is Obsidian's own masked secret-entry component; `data.json` only ever holds the *name* of the secret, never its value.
+
+**Network disclosure:** this plugin makes network requests only to the agent runtimes you configure in Settings, and only when you click a button targeting one or press "Test connection" — never on its own, and never to anything you haven't explicitly configured. It never starts, installs, restarts or configures a runtime; you turn on the runtime's own HTTP endpoint yourself, outside Obsidian.
+
+See the full [Agent Runtimes](https://danrfletcher.github.io/obsidian-inline-agents/agents/runtimes/) page for the complete settings reference, both runtime kinds, and every fallback case.
 
 ## Known limitations (MVP)
 

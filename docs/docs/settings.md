@@ -26,6 +26,17 @@ OpenCode's model dropdown is a live list from `opencode models`:
 
 ![OpenCode's live model dropdown](assets/settings-opencode-models.png)
 
+## Agent runtimes
+
+A second way to run a button — hand its prompt off to an HTTP agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint) instead of the inline terminal. Full detail in [Agent Runtimes](agents/runtimes.md); summary here:
+
+| Setting | | |
+|---|---|---|
+| **Default target** | dropdown, `Terminal` plus every configured runtime name | What a button without a `target:` line uses, and what an unknown `target:` name falls back to. |
+| **(toggle next to it)** | on by default | The default for a button's `open:` line when it's missing or malformed. |
+| Per runtime: **Name**, **Kind** (OpenClaw hook / OpenAI-compatible chat), **Base URL**, **Agent ID or model**, **Token required**, **Send session key as `x-openclaw-session-key`** (chat kind only), **Token** (masked, per-device secret storage), **Thread-URL template** | — | Add, edit or remove a runtime (no reordering — remove and re-add to change order). Two runtimes can't share a name. |
+| **Test connection** | button, per runtime | Checks reachability and the token without sending a prompt. |
+
 ## Where each setting lives in the source
 
 For contributors: the whole tab is `AgentConsoleSettingTab` in `src/settings.ts`, using the classic imperative `display()` API rather than the declarative `getSettingDefinitions()` one — the model-mapping list (dynamically added/removed rows, a custom dropdown with a per-option copy button, live status dots) needs DOM control the declarative control types can't express. One trade-off: this tab doesn't appear in Obsidian's own in-app settings search.
