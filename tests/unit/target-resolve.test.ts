@@ -26,7 +26,10 @@ const runtimes = [openclaw, chatRuntime];
 
 /** Keyed by secret *name* (tokenSecretName), not runtime id — see runtime/types.ts. */
 function fakeSecretStore(hasToken: Record<string, boolean>): SecretStore {
-	return { hasToken: (name) => (name ? hasToken[name] === true : false) };
+	return {
+		hasToken: (name) => (name ? hasToken[name] === true : false),
+		getToken: () => undefined,
+	};
 }
 
 test("no target: line silently resolves via the configured default target", () => {

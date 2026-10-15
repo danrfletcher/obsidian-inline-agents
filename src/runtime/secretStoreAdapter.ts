@@ -9,5 +9,10 @@ export function createSecretStoreAdapter(app: App): SecretStore {
 			const value = app.secretStorage.getSecret(tokenSecretName);
 			return typeof value === "string" && value.trim() !== "";
 		},
+		getToken(tokenSecretName: string | undefined): string | undefined {
+			if (!tokenSecretName) return undefined;
+			const value = app.secretStorage.getSecret(tokenSecretName);
+			return typeof value === "string" && value.trim() !== "" ? value : undefined;
+		},
 	};
 }

@@ -1,3 +1,4 @@
+import type { AgentRuntime } from "./types";
 import type { TargetResolution } from "./targetResolve";
 
 export interface ClickRoutingHooks {
@@ -9,17 +10,20 @@ export interface ClickRoutingHooks {
 	 * into "some of the terminal steps run anyway".
 	 */
 	runTerminalFlow: () => void;
+	/** PR-1.F1: hands the resolved runtime off to the hand-off flow (see runtime/handoff.ts) — never touches any terminal state (F8, G11: no run state, no completion, no file output for a runtime target). */
+	runRuntimeFlow: (runtime: AgentRuntime) => void;
 }
 
 /**
  * The only thing standing between a resolved target and the terminal: for
- * "terminal", run the (unchanged) terminal flow; for "runtime", do nothing
- * terminal-related at all. Sending the prompt to a runtime isn't built yet
- * (that's PR-1.F1) — this PR's runtime branch is otherwise a no-op once its
- * notices (unknown target, ignored fields, token missing) have been shown.
+ * "terminal", run the (unchanged) terminal flow; for "runtime", hand off to
+ * the HTTP runtime flow instead — never both, and never a terminal flash
+ * on the way there (F8).
  */
 export function runClickDecision(resolution: TargetResolution, hooks: ClickRoutingHooks): void {
 	if (resolution.kind === "terminal") {
 		hooks.runTerminalFlow();
+	} else {
+		hooks.runRuntimeFlow(resolution.runtime);
 	}
 }

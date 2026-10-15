@@ -2,8 +2,24 @@ import type { AgentRuntime } from "./types";
 
 export type ValidationResult = { ok: true } | { ok: false; reason: string };
 
-/** Schemes a thread-URL template is never allowed to use, regardless of how it's typed. */
-const DISALLOWED_THREAD_URL_SCHEMES = new Set(["file", "javascript", "data", "vbscript"]);
+/**
+ * Schemes a thread-URL template is never allowed to use, regardless of how
+ * it's typed — checked both here (settings-time) and again, defensively,
+ * right before a thread is actually opened (runtime/threadUrl.ts's
+ * openThreadUrl, G9) in case a template reached that point some other way
+ * than this form (e.g. an older data.json).
+ */
+export const DISALLOWED_THREAD_URL_SCHEMES = new Set(["file", "javascript", "data", "vbscript"]);
+
+/** The scheme (lowercased, without the trailing ":") a URL or template starts with, or undefined if it doesn't start with one at all. */
+export function extractUrlScheme(raw: string): string | undefined {
+	const match = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(raw.trim());
+	return match ? match[1].toLowerCase() : undefined;
+}
+
+export function isDisallowedUrlScheme(scheme: string): boolean {
+	return DISALLOWED_THREAD_URL_SCHEMES.has(scheme.toLowerCase());
+}
 
 /**
  * The thread-URL template is optional and user-supplied (the plugin doesn't
@@ -15,12 +31,11 @@ const DISALLOWED_THREAD_URL_SCHEMES = new Set(["file", "javascript", "data", "vb
 export function validateThreadUrlTemplate(raw: string): ValidationResult {
 	const trimmed = raw.trim();
 	if (!trimmed) return { ok: true };
-	const match = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(trimmed);
-	if (!match) {
+	const scheme = extractUrlScheme(trimmed);
+	if (!scheme) {
 		return { ok: false, reason: "Thread-URL template must start with a scheme, e.g. https:// or myapp://." };
 	}
-	const scheme = match[1].toLowerCase();
-	if (DISALLOWED_THREAD_URL_SCHEMES.has(scheme)) {
+	if (isDisallowedUrlScheme(scheme)) {
 		return { ok: false, reason: `The "${scheme}:" scheme is not allowed in a thread-URL template.` };
 	}
 	return { ok: true };
