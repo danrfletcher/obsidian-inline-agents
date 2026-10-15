@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildThreadUrl, openThreadUrl } from "../../src/runtime/threadUrl";
+import { buildThreadUrl, openThreadUrl, threadLinkHref } from "../../src/runtime/threadUrl";
 
 test("G9: fills {agentId} and {sessionKey} into the template", () => {
 	const url = buildThreadUrl("https://hermes.example/t/{agentId}/{sessionKey}", {
@@ -68,4 +68,21 @@ test("a URL with no scheme at all is never opened", () => {
 	const result = openThreadUrl("not-a-url", (url) => opened.push(url));
 	assert.equal(result.opened, false);
 	assert.deepEqual(opened, []);
+});
+
+// --- R1: the settled "↗" link's href (buttonBlock.ts) -------------------
+
+test("R1: threadLinkHref is '#' when there is no thread URL at all", () => {
+	assert.equal(threadLinkHref(undefined), "#");
+});
+
+test("R1: threadLinkHref passes through an allowed-scheme URL unchanged", () => {
+	assert.equal(threadLinkHref("https://example.com/thread/1"), "https://example.com/thread/1");
+	assert.equal(threadLinkHref("hermes://thread/1"), "hermes://thread/1");
+});
+
+test("R1: threadLinkHref is '#' (never the raw URL) for a disallowed scheme, in any case", () => {
+	for (const scheme of ["file", "FILE", "javascript", "JavaScript", "data", "DATA", "vbscript", "VBScript"]) {
+		assert.equal(threadLinkHref(`${scheme}:something`), "#");
+	}
 });

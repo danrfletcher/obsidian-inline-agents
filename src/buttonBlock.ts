@@ -14,8 +14,9 @@ import { parseButtonBlock, resolveModel, AgentOutputTarget, CompletionMode } fro
 import { resolveClickTarget } from "./runtime/targetResolve";
 import { runClickDecision } from "./runtime/clickRouting";
 import { createSecretStoreAdapter } from "./runtime/secretStoreAdapter";
-import { createHandoffRunner, createSingleFlightHandoff } from "./runtime/handoff";
+import { createHandoffRunner, createSingleFlightHandoff, sendingLabel, sentLabel } from "./runtime/handoff";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
+import { openThreadUrl, threadLinkHref } from "./runtime/threadUrl";
 import { HOOK_TIMEOUT_MS } from "./runtime/hookRequest";
 import { CHAT_HTTP_TIMEOUT_MS } from "./runtime/chatRequest";
 
@@ -76,6 +77,12 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 		let handle: AgentProcessHandle | null = null;
 		let accordionOpen = false;
 		let sectionInfo: MarkdownSectionInformation | null = null;
+		// R1/G9: the thread URL from the most recently settled hand-off, if
+		// any — what clicking the "↗" link on demand opens. Kept separate
+		// from the link's `href` (see threadLinkHref) so a disallowed
+		// scheme can still be refused with a notice on click rather than
+		// doing nothing.
+		let currentThreadUrl: string | undefined;
 
 		const setAccordionOpen = (open: boolean) => {
 			accordionOpen = open;
@@ -228,9 +235,15 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			// Opening the already-settled thread on demand must never count
 			// as a new click on the button itself (G10: every click on the
 			// button starts a new thread; this is "open the one we already
-			// have").
+			// have"). Goes through the same openThreadUrl scheme check the
+			// automatic open-on-settle path uses (GP6/G9/R1), so a
+			// disallowed scheme is refused with a notice rather than doing
+			// nothing.
 			evt.stopPropagation();
 			evt.preventDefault();
+			if (!currentThreadUrl) return;
+			const result = openThreadUrl(currentThreadUrl, (url) => window.open(url));
+			if (!result.opened && result.reason) new Notice(result.reason);
 		});
 
 		button.addEventListener("click", () => {
@@ -278,17 +291,19 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 							onSending: () => {
 								button.disabled = true;
 								threadLink.setCssStyles({ display: "none" });
-								buttonLabel.setText(`Sending to ${runtime.name}…`);
+								buttonLabel.setText(sendingLabel(runtime.name));
 							},
 							onSent: (threadUrl) => {
 								button.disabled = false;
-								buttonLabel.setText(`Sent to ${runtime.name}`);
-								if (threadUrl) {
-									threadLink.setAttr("href", threadUrl);
-									threadLink.setCssStyles({ display: "inline" });
-								} else {
-									threadLink.setCssStyles({ display: "none" });
-								}
+								buttonLabel.setText(sentLabel(runtime.name));
+								// R1: href only ever carries a URL `openThreadUrl` would
+								// actually open — never a disallowed scheme (file,
+								// javascript, data, vbscript), even though the link
+								// itself still shows and stays clickable whenever a
+								// template exists (GP6/G9).
+								currentThreadUrl = threadUrl;
+								threadLink.setAttr("href", threadLinkHref(threadUrl));
+								threadLink.setCssStyles({ display: threadUrl ? "inline" : "none" });
 							},
 							// G12: every failure before the hand-off is accepted
 							// runs the button exactly as target: terminal would —

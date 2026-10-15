@@ -30,6 +30,23 @@ export interface OpenResult {
 }
 
 /**
+ * G9/GP6/R1: the href the settled "↗" thread link should carry — the real
+ * thread URL when its scheme is one `openThreadUrl` would actually open,
+ * or "#" (never the raw filled URL) when there's no URL at all or its
+ * scheme is one of the ones that must never open automatically. Keeping a
+ * disallowed scheme out of `href` entirely (not just out of the click
+ * handler) matters because an anchor's `href` can be reached outside the
+ * click listener too (e.g. a middle-click or "open in new tab", which
+ * bypasses `preventDefault`) — this is the second line of defence the
+ * click handler's own `openThreadUrl` call backs up.
+ */
+export function threadLinkHref(threadUrl: string | undefined): string {
+	if (!threadUrl) return "#";
+	const scheme = extractUrlScheme(threadUrl);
+	return scheme && !isDisallowedUrlScheme(scheme) ? threadUrl : "#";
+}
+
+/**
  * G9: opens a thread URL through the operating system's own handler
  * (`window.open`, injected here as `openFn` so this stays testable under
  * Node) — on desktop this is what hands an http(s) URL to the user's
