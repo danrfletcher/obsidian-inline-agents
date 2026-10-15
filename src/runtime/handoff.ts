@@ -66,7 +66,42 @@ function chatFailureNotice(name: string, result: ChatFailureResult): string {
 	}
 }
 
+/**
+ * G13/R2: wording for a chat failure that arrives *after* the 5-second
+ * settle. By then `settle()` has already run (the thread may be open, the
+ * button already says "Sent") — `chatFailureNotice`'s pre-send wording
+ * ("running here", "token rejected") is wrong here because no fallback
+ * happens and the terminal never runs; saying either would wrongly invite
+ * a second click/run. This always says the run failed on the runtime
+ * itself and that nothing here retried it.
+ */
+function lateChatFailureNotice(name: string, result: ChatFailureResult): string {
+	const detail =
+		result.kind === "unauthorized"
+			? "rejected the token"
+			: result.kind === "httpError"
+				? `returned status ${result.status}`
+				: "lost the connection";
+	return `${name} ${detail} after accepting the prompt — no fallback ran.`;
+}
+
 type RaceResult<T> = { via: "value"; value: T } | { via: "timer" };
+
+/**
+ * R3: the exact button-label wording for "Sending to <name>…" (G7) and
+ * "Sent to <name>" (G9, before the "↗" link/no-link decision which
+ * buttonBlock.ts makes separately) — exported so both the real click
+ * wiring (buttonBlock.ts) and the secret-leak sweep build the identical
+ * string, instead of the test guessing at a copy that could drift from
+ * what the button actually shows.
+ */
+export function sendingLabel(runtimeName: string): string {
+	return `Sending to ${runtimeName}…`;
+}
+
+export function sentLabel(runtimeName: string): string {
+	return `Sent to ${runtimeName}`;
+}
 
 /** Races `promise` against a plain timer, without assuming anything about either resolving first — used for the chat kind's 5-second rule (G12). Uses the real global `setTimeout`, so a test can control it with `node:test`'s mock timers rather than this module needing its own clock abstraction. */
 function raceSettle<T>(promise: Promise<T>, ms: number): Promise<RaceResult<T>> {
@@ -159,18 +194,29 @@ export function createHandoffRunner(): {
 			sendSessionKeyHeader: input.runtime.sendSessionKeyHeader,
 		});
 
-		const classified = hooks.httpFn(request).then(classifyChatOutcome);
+		// Kept as two handles on the same underlying send: `rawOutcome` so
+		// the post-settle branch can tell a local HttpFn timeout (R2: the
+		// chat HttpFn's own ceiling firing, not a confirmed failure — the
+		// run may well have succeeded on the runtime) apart from a real
+		// unauthorized/httpError/connection failure; `classified` for
+		// everything the 5-second race itself needs to decide.
+		const rawOutcome = hooks.httpFn(request);
+		const classified = rawOutcome.then(classifyChatOutcome);
 		const race = await raceSettle(classified, CHAT_SETTLE_MS);
 
 		if (race.via === "timer") {
 			// G12: 5 seconds with no error is settled.
 			settle(input, hooks, agentId, sessionKey);
-			// G13: an error arriving after that is a notice only — the
-			// terminal never runs and the prompt is never run twice.
-			void classified.then((result) => {
-				if (result.kind !== "accepted") {
-					hooks.notify(chatFailureNotice(input.runtime.name, result));
-				}
+			// G13/R2: an error arriving after that is a notice only — the
+			// terminal never runs and the prompt is never run twice. A
+			// late *timeout* specifically isn't reported at all: it only
+			// means the HttpFn's own ceiling (CHAT_HTTP_TIMEOUT_MS) fired
+			// while the run was likely still going on the runtime, not
+			// that anything is confirmed to have failed.
+			void Promise.all([rawOutcome, classified]).then(([raw, result]) => {
+				if (result.kind === "accepted") return;
+				if (raw.kind === "timeout") return;
+				hooks.notify(lateChatFailureNotice(input.runtime.name, result));
 			});
 			return;
 		}

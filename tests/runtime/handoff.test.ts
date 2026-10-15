@@ -359,7 +359,69 @@ test("G13: an error arriving after settling at 5s is a notice only — the termi
 
 	assert.equal(rec.fallbackCalls, 0);
 	assert.equal(rec.notices.length, 1);
+	// R2: a late failure gets its own wording — never the pre-send
+	// "isn't reachable, running here" (the terminal is not, in fact,
+	// running) and it must say no fallback happened.
 	assert.match(rec.notices[0], /500/);
+	assert.doesNotMatch(rec.notices[0], /running here/);
+	assert.match(rec.notices[0], /no fallback ran/);
+});
+
+test("G13/R2: a late 401/403 after settling says the token was rejected after accepting, not the pre-send 'token rejected' wording", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const runner = createHandoffRunner();
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async () => pending.promise);
+	const runPromise = runner.runHandoff(baseInput(chatRuntime()), rec.hooks);
+	t.mock.timers.tick(5000);
+	await runPromise;
+
+	pending.resolve({ kind: "response", status: 401 });
+	await flushMicrotasks();
+
+	assert.equal(rec.fallbackCalls, 0);
+	assert.equal(rec.notices.length, 1);
+	assert.notEqual(rec.notices[0], "token rejected");
+	assert.match(rec.notices[0], /no fallback ran/);
+});
+
+test("G13/R2: a late connection failure (refused/error) after settling says the runtime failed, not that the terminal is running", async (t) => {
+	for (const outcome of [{ kind: "refused" }, { kind: "error", reason: "x" }] as HttpOutcome[]) {
+		await t.test(`outcome ${outcome.kind}`, async (st) => {
+			st.mock.timers.enable({ apis: ["setTimeout"] });
+			const runner = createHandoffRunner();
+			const pending = deferred<HttpOutcome>();
+			const rec = makeRecorder(async () => pending.promise);
+			const runPromise = runner.runHandoff(baseInput(chatRuntime()), rec.hooks);
+			st.mock.timers.tick(5000);
+			await runPromise;
+
+			pending.resolve(outcome);
+			await flushMicrotasks();
+
+			assert.equal(rec.fallbackCalls, 0);
+			assert.equal(rec.notices.length, 1);
+			assert.doesNotMatch(rec.notices[0], /running here/);
+			assert.match(rec.notices[0], /no fallback ran/);
+		});
+	}
+});
+
+test("G13/R2: a late timeout after settling produces no notice at all — the HttpFn's own ceiling firing isn't a confirmed failure", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const runner = createHandoffRunner();
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async () => pending.promise);
+	const runPromise = runner.runHandoff(baseInput(chatRuntime()), rec.hooks);
+	t.mock.timers.tick(5000);
+	await runPromise;
+	assert.equal(rec.sentUrls.length, 1);
+
+	pending.resolve({ kind: "timeout" });
+	await flushMicrotasks();
+
+	assert.equal(rec.fallbackCalls, 0);
+	assert.equal(rec.notices.length, 0);
 });
 
 test("G13: a late success after settling at 5s produces no extra notice", async (t) => {
