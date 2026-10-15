@@ -56,6 +56,7 @@ nav:
   - Agents and Models:
       - Claude Code and OpenCode: 'agents/overview.md'
       - Model Mappings: 'agents/model-mappings.md'
+      - Agent Runtimes: 'agents/runtimes.md'
   - Settings Reference: 'settings.md'
   - Examples: 'examples.md'
   - FAQ and Troubleshooting: 'faq.md'

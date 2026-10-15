@@ -102,3 +102,33 @@ completion: manual
 ````
 
 ![Multiple buttons in one note, idle](assets/buttons-idle.png)
+
+## Hand a button off to an OpenClaw hook
+
+Requires an OpenClaw instance at `http://127.0.0.1:18789` with its hook enabled, `allowRequestSessionKey: true` and `"inline:"` allowed in `allowedSessionKeyPrefixes` — see [Agent Runtimes](agents/runtimes.md#openclaw-hook) — and a runtime named `openclaw` configured in Settings:
+
+````markdown
+```agent-button
+text: Run weekly review
+prompt: Run the weekly review on {{file.path}}
+target: openclaw
+```
+````
+
+Clicking it shows "Sending to openclaw…", then "Sent to openclaw ↗" — the thread keeps running on OpenClaw even after the note or Obsidian closes.
+
+## Hand a button off to a Hermes Agent (OpenAI-compatible chat)
+
+Requires a Hermes Agent API server at `http://127.0.0.1:8642/v1` and a runtime named `hermes` (kind **OpenAI-compatible chat**) configured in Settings — see [Agent Runtimes](agents/runtimes.md#openai-compatible-chat-hermes-agent-etc):
+
+````markdown
+```agent-button
+text: Summarize today's notes
+prompt: Summarize today's journal entries into three bullet points.
+target: hermes
+open: false
+```
+````
+
+`open: false` sends the prompt without opening anything — the button still shows "Sent to hermes" (or "Sent to hermes ↗" if a thread-URL template is configured), and the run lasts only as long as Obsidian stays open.
+

@@ -31,6 +31,21 @@ Every field except `text` and `prompt` is optional and falls back to a sensible 
 | `append` | `top` / `bottom` / `belowButton` | `bottom` | Where the captured output gets inserted (only meaningful when `agentOutput: file`). |
 | `showTerminal` | `true` / `false` | `true` | Whether the terminal accordion opens automatically on click. |
 | `completion` | `manual` / `responseEnd` | `manual` | How the button's loading state resolves — see [Completion Modes](completion-modes.md). |
+| `target` | `terminal` / a configured agent runtime's name | settings' **Default target** | Where the click goes. `terminal` (or an unrecognised name) runs in the inline terminal as before; a runtime's name hands the prompt off over HTTP instead — see [Agent Runtimes](../agents/runtimes.md). |
+| `open` | `true` / `false` | settings' default for `open` | Runtime targets only: whether the thread opens automatically once the hand-off settles. |
+| `agentId` | any string | the runtime's own configured agent/model | Runtime targets only: overrides the runtime's agent id or model for this one button. |
+
+Example of a runtime target:
+
+````markdown
+```agent-button
+text: Run weekly review
+prompt: Run the weekly review on {{file.path}}
+target: openclaw
+open: true
+agentId: main
+```
+````
 
 ## `{{this file}}` template
 

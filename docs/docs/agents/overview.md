@@ -33,4 +33,4 @@ Green means the configured binary actually runs (`<bin> --version` exits `0`); r
 
 ## Next
 
-See [Model Mappings](model-mappings.md) for how to pin a button to a specific model.
+See [Model Mappings](model-mappings.md) for how to pin a button to a specific model, or [Agent Runtimes](runtimes.md) for sending a button's prompt to an HTTP agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint) instead of running it here.
