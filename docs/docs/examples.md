@@ -130,5 +130,5 @@ open: false
 ```
 ````
 
-`open: false` sends the prompt without opening anything — the button still shows "Sent to hermes" (or "Sent to hermes ↗" if a thread-URL template is configured), and the run lasts only as long as Obsidian stays open.
+`open: false` sends the prompt without opening anything — the button still shows "Sent to hermes" (Hermes has [no thread link yet](agents/runtimes.md#hermes-has-no-thread-link-yet)), and the run lasts only as long as Obsidian stays open.
 

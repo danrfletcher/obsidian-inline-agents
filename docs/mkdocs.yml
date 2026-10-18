@@ -1,5 +1,5 @@
 site_name: Inline Agents
-site_description: Turn "run this workflow" instructions in an Obsidian note into a button that fires Claude Code or OpenCode, in a live terminal.
+site_description: Turn "run this workflow" instructions in an Obsidian note into a button that runs Claude Code or OpenCode in a live terminal, or hands the prompt to an agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint).
 site_url: https://danrfletcher.github.io/obsidian-inline-agents/
 repo_url: https://github.com/danrfletcher/obsidian-inline-agents
 repo_name: danrfletcher/obsidian-inline-agents
