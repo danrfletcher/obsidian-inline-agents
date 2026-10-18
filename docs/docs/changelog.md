@@ -4,6 +4,10 @@ The full, authoritative changelog is the project's [GitHub Releases page](https:
 
 ## Highlights
 
+### 0.3.1
+
+- Shorter plugin description in `manifest.json` (230 characters), to fit the community store's 250-character limit. No code changes.
+
 ### 0.3.0
 
 - Buttons can now send their prompt to an **HTTP agent runtime** instead of the inline terminal — `target: <name>` hands off to a configured runtime (an OpenClaw hook, or any OpenAI-compatible chat endpoint, e.g. Hermes Agent) and opens the resulting thread. New `open:` and `agentId:` button fields, a new **Agent runtimes** section in Settings (name, kind, base URL, token, agent/model, thread-URL template, "Test connection"), and a per-device token stored in Obsidian's own secret storage, never in `data.json`. See [Agent Runtimes](agents/runtimes.md).
