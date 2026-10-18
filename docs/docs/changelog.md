@@ -4,6 +4,14 @@ The full, authoritative changelog is the project's [GitHub Releases page](https:
 
 ## Highlights
 
+### 0.3.0
+
+- Buttons can now send their prompt to an **HTTP agent runtime** instead of the inline terminal — `target: <name>` hands off to a configured runtime (an OpenClaw hook, or any OpenAI-compatible chat endpoint, e.g. Hermes Agent) and opens the resulting thread. New `open:` and `agentId:` button fields, a new **Agent runtimes** section in Settings (name, kind, base URL, token, agent/model, thread-URL template, "Test connection"), and a per-device token stored in Obsidian's own secret storage, never in `data.json`. See [Agent Runtimes](agents/runtimes.md).
+
+### 0.2.1
+
+- Fixed a TDZ (temporal dead zone) crash in `runCommand()` that permanently blocked OpenCode's model refresh.
+
 ### 0.2.0
 
 - `prompt:` templates: `{{ path.to.value }}` context lookups (file, vault, date) and an opt-in `{{= expression }}` mini expression language, replacing the old single `{{this file}}` placeholder. See [Context and Templating](templating/overview.md).
