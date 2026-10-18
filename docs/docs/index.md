@@ -2,6 +2,8 @@
 
 **Inline Agents** turns "run this workflow" instructions in an Obsidian note into a button. Click it, and it fires [Claude Code](https://github.com/anthropics/claude-code) or [OpenCode](https://opencode.ai/) at the note, in a live terminal right underneath — or, if you'd rather not watch it work, quietly in the background with the result dropped straight into the note when it's done.
 
+Or hand the prompt to an agent you already run elsewhere. With `target: <name>`, the button sends its prompt over HTTP to an **agent runtime** — OpenClaw, [Hermes Agent](https://hermes-agent.nousresearch.com/), or any OpenAI-compatible endpoint — and the work carries on there. See [Agent Runtimes](agents/runtimes.md).
+
 Built to replace plain-text "Run `features/learning-artefacts/teacher-artefact-leveller.md`" instructions scattered across a note system with something clickable.
 
 Drop a fenced code block with the `agent-button` language tag anywhere in a note:
@@ -26,6 +28,7 @@ That's it — every field except `text` and `prompt` is optional. Click the butt
 - A "Run sufficiency check" button under every artefact note, instead of remembering the exact command.
 - A background summarizer that appends its findings to the bottom of a daily note and never opens a terminal you have to watch.
 - Different buttons on the same note routed to different agents or different models — a fast local model for a quick pass, a bigger one for the real thing.
+- A "Hand to my agent" button that sends the note to OpenClaw or Hermes Agent, so the work runs with that agent's own memory and tools while you carry on in Obsidian.
 - Prompts that pull real context from the note — frontmatter status, tags, the vault name — instead of static text you have to edit by hand every time.
 
 ## How it works
@@ -39,9 +42,12 @@ Each `agent-button` code block is its own self-contained widget, rendered via Ob
 
 ![Agent output written into the note](assets/agent-output-file.png)
 
+A button with `target: <name>` skips steps 2–4: the rendered prompt goes to the named [agent runtime](agents/runtimes.md) over HTTP, the button shows "Sent to `<name>`", and you read the reply on the runtime.
+
 ## Where to go next
 
 - New to the plugin? Start with [Installation](getting-started/installation.md) and [Your First Button](getting-started/first-button.md).
 - Want the full `agent-button` spec? See [All Fields](reference/fields.md).
+- Want to send a button's prompt to OpenClaw or Hermes Agent? See [Agent Runtimes](agents/runtimes.md).
 - Want prompts that adapt to the note they're in? See [Context and Templating](templating/overview.md).
 - Something not behaving as expected? Check the [FAQ and Troubleshooting](faq.md).

@@ -1,13 +1,19 @@
 name: docs
 on:
-  release:
+  # Releases are created by release.yml with GITHUB_TOKEN, and GitHub doesn't
+  # fire other workflows from GITHUB_TOKEN events, so `release: published`
+  # never ran. workflow_run is exempt from that rule.
+  workflow_run:
+    workflows:
+      - Release
     types:
-      - published
+      - completed
   workflow_dispatch:
 permissions:
   contents: write
 jobs:
   deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

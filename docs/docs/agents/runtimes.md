@@ -4,6 +4,35 @@ A button doesn't have to run in the inline terminal. `target: <name>` hands its 
 
 This is a second *target* for a button, not a replacement for the terminal: `target: terminal` (or no `target:` line at all) behaves exactly as it always has. See [All Fields](../reference/fields.md) for `target:`, `open:` and `agentId:`.
 
+## Terminal or runtime?
+
+| | Inline terminal (`target: terminal`) | Agent runtime (`target: <name>`) |
+|---|---|---|
+| Where the agent runs | Claude Code or OpenCode, spawned on this machine under the note | An agent you already run elsewhere (OpenClaw, Hermes Agent, another OpenAI-compatible server) |
+| What you see in Obsidian | A live terminal, run state, optional output written into the note | A "Sent to `<name>`" button, optionally a link to the thread. Nothing streams back |
+| Where you read the reply | In the note | On the runtime (its app, chat or dashboard) |
+| Survives closing Obsidian | No | OpenClaw hook: yes. OpenAI-compatible chat: no |
+| Setup | Install the CLI | Turn on the runtime's HTTP endpoint, then add it under **Agent runtimes** |
+
+Use a runtime when the work belongs with an agent that has its own memory, tools and channels, and you only want the note to kick it off.
+
+## Quick start
+
+1. Turn on the runtime's HTTP endpoint (see [OpenClaw hook](#openclaw-hook) or [OpenAI-compatible chat](#openai-compatible-chat-hermes-agent-etc) below).
+2. Settings → Inline Agents → **Agent runtimes** → add a runtime. Give it a short **Name**, since that's what buttons type.
+3. Paste the token and click **Test connection**.
+4. Add `target: <name>` to a button:
+
+````markdown
+```agent-button
+text: Hand this note to Hermes
+prompt: Summarise {{file.path}} and list the open actions.
+target: hermes
+```
+````
+
+5. Click it. The button shows "Sending to hermes…", then "Sent to hermes". Read the reply on the runtime.
+
 ## The two runtime kinds
 
 | Kind | Setting value | Covers | Request |
@@ -32,12 +61,43 @@ The run is asynchronous: once OpenClaw accepts the hook (`{ ok: true, runId }`),
 
 Any server exposing an OpenAI-compatible `chat/completions` endpoint — Hermes Agent's API server is the shipped example — can be configured as this kind.
 
-Example: a Hermes Agent API server running at `http://127.0.0.1:8642/v1`.
+#### Example: Hermes Agent
 
-1. In Settings → Inline Agents → **Agent runtimes**, add a runtime: name `hermes`, kind **OpenAI-compatible chat**, base URL `http://127.0.0.1:8642/v1`, agent ID/model, the server's token if it requires one.
-2. A button with `target: hermes` sends the prompt as a normal user turn (`POST <base>/chat/completions`, one `user`-role message) — nothing is prefixed onto it the way the OpenClaw hook kind's instruction line is.
+Hermes Agent ships an OpenAI-compatible [API server](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server), off by default. It runs inside the Hermes gateway.
 
-Unlike the OpenClaw hook, this run **lasts only while Obsidian stays open** — there's no separate asynchronous session on the runtime's side; the request itself is the run, and a dropped connection (including Obsidian closing) cancels it. See [E11](#fire-and-forget-and-what-is-not-tracked) below.
+1. **Turn the API server on.** Add two lines to `~/.hermes/.env` (generate the key with `openssl rand -hex 32`):
+
+    ```bash
+    API_SERVER_ENABLED=true
+    API_SERVER_KEY=<your-generated-key>
+    ```
+
+2. **Restart the gateway** with `hermes gateway restart` (or start it with `hermes gateway`). Its log should show `API server listening on http://127.0.0.1:8642`. Check it from a terminal:
+
+    ```bash
+    curl -s -H "Authorization: Bearer <your-generated-key>" http://127.0.0.1:8642/v1/models
+    ```
+
+3. **Add the runtime.** Settings → Inline Agents → **Agent runtimes** → add:
+
+    | Field | Value |
+    |---|---|
+    | Name | `hermes` |
+    | Kind | **OpenAI-compatible chat** |
+    | Base URL | `http://127.0.0.1:8642/v1` |
+    | Agent ID or model | `hermes-agent` |
+    | Token required | on |
+    | Token | the `API_SERVER_KEY` value |
+    | Send session key as `x-openclaw-session-key` | off (that header is for OpenClaw) |
+    | Thread-URL template | leave blank (see [Hermes has no thread link yet](#hermes-has-no-thread-link-yet)) |
+
+4. Click **Test connection**. It calls `GET /models`, so a wrong key shows up here rather than on the first click.
+
+5. A button with `target: hermes` now sends its prompt as a normal user turn (`POST <base>/chat/completions`, one `user`-role message). Nothing is prefixed onto it the way the OpenClaw hook kind's instruction line is. The turn runs on the Hermes profile whose gateway hosts the API server, with that profile's tools, memory and skills. Read the reply on the Hermes side.
+
+The same steps work for any other OpenAI-compatible server: point **Base URL** at its `/v1` root and set **Agent ID or model** to a model name it accepts.
+
+Unlike the OpenClaw hook, this run **lasts only while Obsidian stays open** — there's no separate asynchronous session on the runtime's side; the request itself is the run, and a dropped connection (including Obsidian closing) cancels it. See [Fire-and-forget](#fire-and-forget-and-what-is-not-tracked) below.
 
 ## Agent runtimes settings
 
@@ -111,11 +171,20 @@ An optional per-runtime template that builds the link the "Sent to `<name>` ↗"
 | `{sessionKey}` | The full session key, e.g. `inline:weekly-review:1760000000000`. |
 | `{sessionKeyPath}` | The session key split on `:` into path segments and rejoined with `/` — `inline/weekly-review/1760000000000`. |
 
-The template can use `http`, `https`, or any custom URL scheme a runtime's own app registers (so a desktop app like Hermes' can open the thread directly when its thread-URL template uses the scheme it handles) — the plugin doesn't know any particular runtime's scheme, so anything is accepted except four schemes that are never safe to open automatically: **`file`**, **`javascript`**, **`data`**, **`vbscript`**. A template using one of those is rejected at settings-save time, and checked again defensively right before a thread would open.
+The template can use `http`, `https`, or any custom URL scheme a runtime's own app registers — the plugin doesn't know any particular runtime's scheme, so anything is accepted except four schemes that are never safe to open automatically: **`file`**, **`javascript`**, **`data`**, **`vbscript`**. A template using one of those is rejected at settings-save time, and checked again defensively right before a thread would open.
 
 With no thread-URL template at all, there's nothing to open — the click is fire-and-forget, the button just shows "Sent to `<name>`" with no link, and (with `open: true`) a one-time-per-runtime-per-session notice says no thread URL is set.
 
 Opening a thread uses the operating system's own URL handler, the same way a link in any other app would — an `http(s)` URL opens in your default browser; a custom scheme opens whatever app registered it.
+
+### Hermes has no thread link yet
+
+Leave the Thread-URL template blank for a Hermes runtime. The Hermes desktop app can open a chat by link, but none of the placeholders above give it the right chat:
+
+- Hermes picks its own id for the chat a button starts, and the plugin doesn't learn it. `{sessionKey}` is the plugin's own key, and the chat kind only sends it as `x-openclaw-session-key`, which Hermes ignores.
+- The plugin's session keys contain `:`, which Hermes' in-app links reject.
+
+Until that changes, a Hermes button shows "Sent to hermes" with no link, and you find the chat in Hermes yourself.
 
 ## Test connection
 
