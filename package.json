@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-inline-agents",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"description": "Turn workflow instructions in a note into buttons that run Claude Code or OpenCode with a live terminal, or hand off to an HTTP agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint).",
 	"main": "main.js",
 	"type": "module",

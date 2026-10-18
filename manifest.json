@@ -1,9 +1,9 @@
 {
 	"id": "inline-agents",
 	"name": "Inline Agents",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"minAppVersion": "1.13.0",
-	"description": "Turn \"run this workflow\" instructions in a note into a button that fires Claude Code or OpenCode at the note with a live terminal underneath, or hands the prompt off to an HTTP agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint) and opens the thread.",
+	"description": "Turn \"run this workflow\" instructions in a note into a button that runs Claude Code or OpenCode on the note in a live terminal, or hands the prompt to an HTTP agent runtime (OpenClaw, Hermes Agent, any OpenAI-compatible endpoint).",
 	"author": "Dan Fletcher",
 	"isDesktopOnly": true
 }
