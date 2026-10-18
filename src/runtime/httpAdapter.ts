@@ -30,13 +30,19 @@ export function createObsidianHttpFn(timeoutMs: number = DEFAULT_TIMEOUT_MS): Ht
 				url: request.url,
 				method: request.method,
 				headers: request.headers,
+				body: request.body,
 				throw: false,
 			})
 				.then((response) => {
 					if (settled) return;
 					settled = true;
 					clearTimeout(timer);
-					resolve({ kind: "response", status: response.status });
+					// `.text` is already a resolved string on the response object
+					// (not a promise) — see RequestUrlResponse in obsidian.d.ts.
+					// Reading it here, once, is how the hook kind gets at its
+					// `{ ok, runId }` JSON body (classifyHookOutcome parses it);
+					// the chat kind ignores this field entirely (G15).
+					resolve({ kind: "response", status: response.status, body: response.text });
 				})
 				.catch((err: unknown) => {
 					if (settled) return;

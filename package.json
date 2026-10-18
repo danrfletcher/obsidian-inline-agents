@@ -8,7 +8,7 @@
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
 		"lint": "eslint src/",
-		"test": "node --import tsx --test \"tests/unit/**/*.test.ts\""
+		"test": "node --import tsx --test \"tests/unit/**/*.test.ts\" \"tests/runtime/**/*.test.ts\""
 	},
 	"keywords": [
 		"obsidian-plugin",
