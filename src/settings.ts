@@ -3,6 +3,7 @@ import type AgentConsolePlugin from "./main";
 import type { AgentKind } from "./agents";
 import { checkBinaryAvailable, listOpenCodeModels, resolveBinary, CLAUDE_CANDIDATES, OPENCODE_CANDIDATES } from "./runner";
 import { CLAUDE_MODEL_OPTIONS } from "./settingsModel";
+import { OpenCodeModelLoader } from "./openCodeModelLoader";
 import type { AgentRuntime, RuntimeKind } from "./runtime/types";
 import { validateBaseUrl, validateRuntimeName, validateThreadUrlTemplate } from "./runtime/validation";
 import { testConnection } from "./runtime/testConnection";
@@ -34,8 +35,17 @@ type ConnectionStatus = "checking" | "connected" | "disconnected";
 export class AgentConsoleSettingTab extends PluginSettingTab {
 	plugin: AgentConsolePlugin;
 	private statusDots: Partial<Record<ProviderKey, HTMLElement>> = {};
-	private openCodeModelCache: string[] = [];
-	private openCodeModelsLoading = false;
+	// Owns OpenCode's model list and the "fetch at most once per tab open"
+	// rule that stops a render → fetch → render loop (see the class).
+	private readonly openCodeModels = new OpenCodeModelLoader(async () => {
+		let cwd: string;
+		try {
+			cwd = this.plugin.getVaultBasePath();
+		} catch {
+			return [];
+		}
+		return listOpenCodeModels(this.resolvedBinary("opencode"), cwd);
+	});
 	// A runtime row added with "Add runtime" but not yet valid (no name or
 	// no base URL). Lives only here, in memory: it is written to data.json
 	// (moved into settings.runtimes) the moment it becomes valid, and
@@ -60,12 +70,25 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	// True between display() and hide(); a fetch that finishes after the tab
+	// was closed must not re-render it (that would re-add the document
+	// click listener hide() just removed).
+	private isOpen = false;
+
+	private redrawIfOpen(): void {
+		if (this.isOpen) this.display();
+	}
+
 	hide(): void {
+		this.isOpen = false;
 		this.draftRuntime = null;
+		// Next time the tab opens, fetch the model list afresh (once).
+		this.openCodeModels.reset();
 		document.removeEventListener("click", this.handleDocumentClick);
 	}
 
 	display(): void {
+		this.isOpen = true;
 		const { containerEl } = this;
 		containerEl.empty();
 		this.openPickers = [];
@@ -145,7 +168,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				"behaviour as Claude Code above applies if this path doesn't exist in the current environment.",
 			binaryPlaceholder: "/usr/local/bin/opencode",
 			modelOptionsDesc: "Live list from `opencode models` — covers every provider OpenCode is currently configured for (including a local Ollama provider, if you've set one up).",
-			getModelOptions: () => this.openCodeModelCache,
+			getModelOptions: () => this.openCodeModels.models,
 			modelPlaceholder: "model string, e.g. ollama/qwen3.8:27b-mlx",
 		});
 	}
@@ -442,21 +465,6 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		this.setStatus(key, ok ? "connected" : "disconnected");
 	}
 
-	private async refreshOpenCodeModels(onUpdate: () => void): Promise<void> {
-		if (this.openCodeModelsLoading) return;
-		this.openCodeModelsLoading = true;
-		let cwd: string;
-		try {
-			cwd = this.plugin.getVaultBasePath();
-		} catch {
-			this.openCodeModelsLoading = false;
-			return;
-		}
-		this.openCodeModelCache = await listOpenCodeModels(this.resolvedBinary("opencode"), cwd);
-		this.openCodeModelsLoading = false;
-		onUpdate();
-	}
-
 	private renderProviderSection(
 		containerEl: HTMLElement,
 		opts: {
@@ -480,7 +488,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					void this.refreshStatus(opts.key);
 					if (opts.key === "opencode") {
-						void this.refreshOpenCodeModels(() => this.display());
+						void this.openCodeModels.refresh(() => this.redrawIfOpen());
 					}
 				})
 		);
@@ -499,8 +507,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			);
 
 		void this.refreshStatus(opts.key);
-		if (opts.key === "opencode" && this.openCodeModelCache.length === 0 && !this.openCodeModelsLoading) {
-			void this.refreshOpenCodeModels(() => this.display());
+		if (opts.key === "opencode") {
+			void this.openCodeModels.ensureLoaded(() => this.redrawIfOpen());
 		}
 
 		const mappingsHeader = new Setting(containerEl)
