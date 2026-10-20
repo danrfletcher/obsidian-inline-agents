@@ -196,6 +196,8 @@ Each runtime has its own **Test connection** button — it checks reachability a
 
 A runtime's token is kept in **Obsidian's own secret storage**, not in `data.json`, a note, or any log. Secret storage is **per device** — the token field itself is Obsidian's own masked secret-entry component, and what gets saved to `data.json` is only the *name* of the secret, never the value. If settings sync to a second device, that device has the runtime configured but has to enter the token again; until it does, a token-required runtime shows "token not set on this device" and a click falls back to the terminal rather than sending with no token.
 
+The secret store is also shared with other plugins and has no delete call for plugins to use, so **removing a runtime does not delete or blank its secret**: the runtime disappears from the list, and the secret stays in Obsidian's secret storage (another plugin or device may be using the same name). To delete it, use Obsidian's own secret manager.
+
 A token never appears in a note, a thread URL, a query string, the console, a notice, or an error message — failures are reported by HTTP status and a fixed reason string only, never by echoing a header or body. "Test connection" never shows the token either.
 
 ## Falling back to the terminal

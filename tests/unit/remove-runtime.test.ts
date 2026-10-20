@@ -1,7 +1,9 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { removeRuntime } from "../../src/runtime/removeRuntime";
-import type { AgentRuntime } from "../../src/runtime/types";
+import type { AgentRuntime, SecretStore } from "../../src/runtime/types";
 import type { RemovableSettings } from "../../src/runtime/removeRuntime";
 
 function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
@@ -18,28 +20,38 @@ function makeRuntime(overrides: Partial<AgentRuntime>): AgentRuntime {
 	};
 }
 
-function fakeClearer(): { cleared: string[]; clearSecret: (name: string) => void } {
-	const cleared: string[] = [];
-	return { cleared, clearSecret: (name) => cleared.push(name) };
-}
+test("removing a runtime drops it from the list and keeps its token secret in storage", () => {
+	const removed = makeRuntime({ name: "openclaw", tokenSecretName: "openai-key" });
+	const kept = makeRuntime({ name: "hermes", tokenSecretName: "hermes-secret" });
+	const settings: RemovableSettings = { runtimes: [removed, kept], defaultTarget: "terminal" };
+	// A real in-memory SecretStore standing in for Obsidian's shared storage.
+	const storage = new Map([["openai-key", "sk-shared"], ["hermes-secret", "h-token"]]);
+	const store: SecretStore = {
+		hasToken: (name) => !!name && (storage.get(name) ?? "").trim() !== "",
+		getToken: (name) => (name ? storage.get(name) || undefined : undefined),
+	};
 
-test("T1/T11/C17: removing a runtime clears its secret via SecretStorage.setSecret(name, '')", () => {
-	const runtime = makeRuntime({});
-	const settings: RemovableSettings = { runtimes: [runtime], defaultTarget: "terminal" };
-	const clearer = fakeClearer();
+	removeRuntime(settings, 0);
 
-	removeRuntime(settings, 0, clearer);
+	assert.deepEqual(settings.runtimes, [kept]);
+	// The secret the removed runtime pointed at (which another plugin or
+	// device may use too) is still there, untouched.
+	assert.equal(store.getToken("openai-key"), "sk-shared");
+	assert.equal(store.getToken(kept.tokenSecretName), "h-token");
+});
 
-	assert.deepEqual(settings.runtimes, []);
-	assert.deepEqual(clearer.cleared, ["openclaw-secret"]);
+test("Remove never writes to SecretStorage: no setSecret call anywhere in settings.ts", () => {
+	// removeRuntime takes no secret store, so the only way to blank a shared
+	// secret on Remove is the settings tab calling setSecret itself.
+	const source = readFileSync(join(process.cwd(), "src/settings.ts"), "utf8");
+	assert.doesNotMatch(source, /setSecret\s*\(/);
 });
 
 test("T11/C17: removing the runtime that is the default target resets defaultTarget to terminal", () => {
 	const runtime = makeRuntime({ name: "OpenClaw" });
 	const settings: RemovableSettings = { runtimes: [runtime], defaultTarget: "openclaw" };
-	const clearer = fakeClearer();
 
-	removeRuntime(settings, 0, clearer);
+	removeRuntime(settings, 0);
 
 	assert.equal(settings.defaultTarget, "terminal");
 });
@@ -48,42 +60,17 @@ test("removing a runtime that is not the default target leaves defaultTarget unt
 	const removed = makeRuntime({ name: "openclaw" });
 	const kept = makeRuntime({ name: "hermes", id: "hermes-id", tokenSecretName: "hermes-secret" });
 	const settings: RemovableSettings = { runtimes: [removed, kept], defaultTarget: "hermes" };
-	const clearer = fakeClearer();
 
-	removeRuntime(settings, 0, clearer);
+	removeRuntime(settings, 0);
 
 	assert.equal(settings.defaultTarget, "hermes");
 	assert.deepEqual(settings.runtimes, [kept]);
 });
 
-test("a runtime with no tokenSecretName set clears nothing", () => {
-	const runtime = makeRuntime({ tokenSecretName: undefined });
-	const settings: RemovableSettings = { runtimes: [runtime], defaultTarget: "terminal" };
-	const clearer = fakeClearer();
-
-	removeRuntime(settings, 0, clearer);
-
-	assert.deepEqual(clearer.cleared, []);
-});
-
-test("clearing is skipped when another remaining runtime still references the same secret name", () => {
-	const removed = makeRuntime({ name: "openclaw", tokenSecretName: "shared-secret" });
-	const kept = makeRuntime({ name: "hermes", id: "hermes-id", tokenSecretName: "shared-secret" });
-	const settings: RemovableSettings = { runtimes: [removed, kept], defaultTarget: "terminal" };
-	const clearer = fakeClearer();
-
-	removeRuntime(settings, 0, clearer);
-
-	assert.deepEqual(clearer.cleared, []);
-	assert.deepEqual(settings.runtimes, [kept]);
-});
-
 test("removing an out-of-range index is a no-op", () => {
 	const settings: RemovableSettings = { runtimes: [], defaultTarget: "terminal" };
-	const clearer = fakeClearer();
 
-	removeRuntime(settings, 0, clearer);
+	removeRuntime(settings, 0);
 
 	assert.deepEqual(settings.runtimes, []);
-	assert.deepEqual(clearer.cleared, []);
 });

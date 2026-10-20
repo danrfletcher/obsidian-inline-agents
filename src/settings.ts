@@ -395,14 +395,14 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					void (async () => {
 						if (runtime === this.draftRuntime) {
 							// Never saved, so there's nothing to remove from
-							// settings and no stored token to clear.
+							// settings.
 							this.draftRuntime = null;
 							this.display();
 							return;
 						}
-						removeRuntime(this.plugin.settings, this.plugin.settings.runtimes.indexOf(runtime), {
-							clearSecret: (name) => this.plugin.app.secretStorage.setSecret(name, ""),
-						});
+						// The token secret is left in Obsidian's shared secret
+						// storage on purpose — see removeRuntime's docstring.
+						removeRuntime(this.plugin.settings, this.plugin.settings.runtimes.indexOf(runtime));
 						await this.plugin.saveSettings();
 						this.display();
 					})();
