@@ -53,6 +53,12 @@ export interface HttpRequest {
 	method: string;
 	headers: Record<string, string>;
 	body?: string;
+	/**
+	 * Whether the caller needs the response text (`HttpOutcome.body`). Off by
+	 * default: only the hook kind sets it (it parses a `{ ok, runId }` reply);
+	 * the chat kind and "Test connection" never read a response body (G15).
+	 */
+	readBody?: boolean;
 }
 
 /**
@@ -61,11 +67,11 @@ export interface HttpRequest {
  * reaches anything that builds a user-facing message, so there's exactly one
  * place (the adapter) that could ever leak a raw error string.
  *
- * `body` (response kind only) carries the raw response text, read once by
- * the adapter (see httpAdapter.ts) and handled differently per runtime kind
- * (G15): the hook kind parses it as JSON `{ ok, runId }` via
- * hookRequest.ts's classifyHookOutcome; the chat kind's classifyChatOutcome
- * (chatRequest.ts) never reads this field at all.
+ * `body` (response kind only) carries the raw response text, present only
+ * when the request set `readBody` (see httpCore.ts): the hook kind asks for
+ * it and parses it as JSON `{ ok, runId }` via hookRequest.ts's
+ * classifyHookOutcome; the chat kind never asks, so its response body is
+ * never read at all (G15).
  */
 export type HttpOutcome =
 	| { kind: "response"; status: number; body?: string }

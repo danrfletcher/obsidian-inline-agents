@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
-import type { HttpFn, HttpOutcome } from "./types";
+import type { HttpFn } from "./types";
+import { createHttpFn } from "./httpCore";
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -8,53 +9,28 @@ const DEFAULT_TIMEOUT_MS = 10000;
  * every tested module takes an `HttpFn` instead (see types.ts), so the test
  * suite never needs a real or mocked Obsidian to run (`requestUrl` has no
  * runtime implementation outside Obsidian; the npm "obsidian" package ships
- * types only).
- *
- * Also the one place a thrown error gets turned into a fixed, non-echoing
- * reason before anything downstream can turn it into a user-facing message
- * — F5 requires that no failure path ever surfaces a raw error string
- * (which could, depending on the underlying transport, embed the request
- * URL or other request detail).
+ * types only). The timeout, error-normalising and body-reading rules live in
+ * httpCore.ts, which is what the tests exercise.
  */
 export function createObsidianHttpFn(timeoutMs: number = DEFAULT_TIMEOUT_MS): HttpFn {
-	return (request) => {
-		return new Promise<HttpOutcome>((resolve) => {
-			let settled = false;
-			const timer = setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				resolve({ kind: "timeout" });
-			}, timeoutMs);
-
-			requestUrl({
+	return createHttpFn(
+		async (request) => {
+			const response = await requestUrl({
 				url: request.url,
 				method: request.method,
 				headers: request.headers,
 				body: request.body,
 				throw: false,
-			})
-				.then((response) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					// `.text` is already a resolved string on the response object
-					// (not a promise) — see RequestUrlResponse in obsidian.d.ts.
-					// Reading it here, once, is how the hook kind gets at its
-					// `{ ok, runId }` JSON body (classifyHookOutcome parses it);
-					// the chat kind ignores this field entirely (G15).
-					resolve({ kind: "response", status: response.status, body: response.text });
-				})
-				.catch((err: unknown) => {
-					if (settled) return;
-					settled = true;
-					clearTimeout(timer);
-					const message = err instanceof Error ? err.message : String(err);
-					if (/ECONNREFUSED|ERR_CONNECTION_REFUSED|refused/i.test(message)) {
-						resolve({ kind: "refused" });
-					} else {
-						resolve({ kind: "error", reason: "request failed" });
-					}
-				});
-		});
-	};
+			});
+			// `.text` is a getter on the response (see RequestUrlResponse in
+			// obsidian.d.ts), so wrapping it in a function keeps it unread
+			// unless httpCore asks for it.
+			return { status: response.status, readText: () => response.text };
+		},
+		timeoutMs,
+		{
+			setTimer: (callback, ms) => window.setTimeout(callback, ms),
+			clearTimer: (handle) => window.clearTimeout(handle as number),
+		}
+	);
 }
