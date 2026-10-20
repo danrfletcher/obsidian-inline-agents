@@ -9,16 +9,17 @@ const MAX_BASENAME_LENGTH = 40;
 
 /**
  * The key's note part: the basename lowercased, any character outside
- * a-z, 0-9, "-" and "_" replaced with "-" (this also turns ":" itself into
- * "-", so the basename segment never introduces an extra ":" into the key),
- * truncated to 40 characters. A basename that sanitises away to nothing
+ * a-z, 0-9, "-" and "_" replaced with "-" — one "-" per character, so an
+ * emoji or other astral character gives one, not two (the `u` flag). This
+ * also turns ":" itself into "-", so the basename segment never introduces
+ * an extra ":" into the key. The result is truncated to 40 characters. A basename that sanitises away to nothing
  * (e.g. an empty string) falls back to "note" rather than leaving an empty
  * segment between the two ":" separators — the ticket doesn't specify this
  * case, so this is a judgement call.
  */
 export function sanitiseBasename(basename: string): string {
 	const lower = basename.toLowerCase();
-	const replaced = lower.replace(/[^a-z0-9_-]/g, "-");
+	const replaced = lower.replace(/[^a-z0-9_-]/gu, "-");
 	const truncated = replaced.slice(0, MAX_BASENAME_LENGTH);
 	return truncated.length > 0 ? truncated : "note";
 }
