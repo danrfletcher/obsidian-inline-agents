@@ -32,9 +32,10 @@ function buildCheckUrl(runtime: TestConnectionRuntime): string {
  * G3: checks reachability and the token, without sending a prompt — this
  * never builds a `/hooks/agent` or `/chat/completions` request, just a GET
  * against a kind-specific, non-prompt endpoint with (at most) a bearer
- * token header (F6: no OAuth, no other custom header). Uses whatever token
- * is currently entered in the form (E6), not what's already saved to
- * secret storage.
+ * token header (F6: no OAuth, no other custom header). Uses the token the
+ * caller passes in (E6) — the settings tab reads it from secret storage
+ * through the runtime's saved secret name, so there is no separate
+ * "typed but unsaved" token.
  *
  * Every branch here is a canned, fixed string plus a status code — F5
  * requires that no output of this module ever contains the token, for

@@ -11,19 +11,11 @@ import { writeAgentOutputToFile, AppendPosition } from "./fileOutput";
 import { buildAgentContext } from "./context";
 import { renderPromptTemplate } from "./templating";
 import { parseButtonBlock, resolveModel, AgentOutputTarget, CompletionMode } from "./buttonParse";
-import { resolveClickTarget } from "./runtime/targetResolve";
-import { runClickDecision } from "./runtime/clickRouting";
 import { createSecretStoreAdapter } from "./runtime/secretStoreAdapter";
-import { createHandoffRunner, createSingleFlightHandoff, sendingLabel, sentLabel } from "./runtime/handoff";
+import { createHandoffRunner, createSingleFlightHandoff } from "./runtime/handoff";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
 import { openThreadUrl, threadLinkHref } from "./runtime/threadUrl";
-import { HOOK_TIMEOUT_MS } from "./runtime/hookRequest";
-import { CHAT_HTTP_TIMEOUT_MS } from "./runtime/chatRequest";
-
-/** `<vault base path>/<vault-relative source path>` — the absolute path that goes on the hand-off message's last "Note:" line (G7). Vault-relative paths always use "/" regardless of OS. */
-function toAbsoluteNotePath(vaultBasePath: string, sourcePath: string): string {
-	return `${vaultBasePath.replace(/[\\/]+$/, "")}/${sourcePath}`;
-}
+import { createClickHandler, createRuntimeFlow, createTerminalFlow } from "./runtime/clickFlow";
 
 export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 	const secretStore = createSecretStoreAdapter(plugin.app);
@@ -123,25 +115,13 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			});
 		};
 
-		// The entire pre-PR-1.F1 click body — sessionAlive check, accordion,
-		// ensureTerm, spawn, all of it — unchanged. Also reused directly as
-		// the runtime flow's fallback-to-terminal (G12/E2/E3/E4/E6/E12):
-		// every failure before a hand-off is accepted runs the button
-		// exactly as if `target:` had been `terminal` all along.
-		const runTerminalFlow = () => {
-			if (sessionAlive) {
-				setAccordionOpen(true);
-				return;
-			}
-			sessionAlive = true;
-			setVisualState("running");
-			toggle.setCssStyles({ display: "block" });
-
-			const showTerminal = spec.showTerminal ?? true;
-			setAccordionOpen(showTerminal);
-			ensureTerm();
-			term?.clear();
-
+		// The 0.2.1 terminal click body, split into the steps createTerminalFlow
+		// (runtime/clickFlow.ts) runs in a fixed order: sessionAlive check,
+		// accordion, ensureTerm, clear, then `launchTerminalSession`. Also
+		// reused directly as the runtime flow's fallback-to-terminal
+		// (G12/E2/E3/E4/E6/E12): every failure before a hand-off is accepted
+		// runs the button exactly as if `target:` had been `terminal` all along.
+		const launchTerminalSession = () => {
 			// Snapshot where this block sits in the note right now — used by
 			// agentOutput: file / append: belowButton once the run finishes.
 			// See writeAgentOutputToFile's docstring for why this is only a
@@ -225,6 +205,20 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			});
 		};
 
+		const runTerminalFlow = createTerminalFlow({
+			isSessionAlive: () => sessionAlive,
+			revealExistingSession: () => setAccordionOpen(true),
+			markRunning: () => {
+				sessionAlive = true;
+				setVisualState("running");
+				toggle.setCssStyles({ display: "block" });
+			},
+			applyAccordionPreference: () => setAccordionOpen(spec.showTerminal ?? true),
+			ensureTerm,
+			clearTerm: () => term?.clear(),
+			launch: launchTerminalSession,
+		});
+
 		// G7/E10: one single-flight wrapper per block — a second click while
 		// this block's own hand-off is still in flight is ignored outright.
 		// Not shared across blocks (unlike handoffRunner itself), since the
@@ -246,79 +240,65 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			if (!result.opened && result.reason) new Notice(result.reason);
 		});
 
-		button.addEventListener("click", () => {
-			// Resolved before any terminal set-up (sessionAlive check,
-			// accordion, ensureTerm) — a runtime target must never flash a
-			// terminal, even for one tick (F8, G11). See
-			// runtime/targetResolve.ts and runtime/clickRouting.ts.
-			const resolution = resolveClickTarget(spec, plugin.settings, secretStore);
-			resolution.notices.forEach((notice) => new Notice(notice));
-
-			runClickDecision(resolution, {
-				runTerminalFlow,
-				runRuntimeFlow: (runtime) => {
-					let cwd: string;
-					try {
-						cwd = plugin.getVaultBasePath();
-					} catch (err) {
-						new Notice((err as Error).message);
-						return;
-					}
-					const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
-					const rendered = renderPromptTemplate(spec.prompt, context, {
-						allowJs: plugin.settings.allowJsExpressions,
-					});
-					if (rendered.error) {
-						new Notice(rendered.error);
-						return;
-					}
-
-					void sendHandoff(
-						{
-							runtime,
-							agentIdOverride: spec.agentId,
-							prompt: rendered.text,
-							notePath: toAbsoluteNotePath(cwd, ctx.sourcePath),
-							noteBasename: context.file.basename,
-							openRequested: spec.open ?? plugin.settings.defaultOpen,
-							token: secretStore.getToken(runtime.tokenSecretName),
-						},
-						{
-							httpFn: createObsidianHttpFn(runtime.kind === "openclaw-hook" ? HOOK_TIMEOUT_MS : CHAT_HTTP_TIMEOUT_MS),
-							nowMs: () => Date.now(),
-							openUrl: (url) => window.open(url),
-							notify: (message) => new Notice(message),
-							onSending: () => {
-								button.disabled = true;
-								threadLink.setCssStyles({ display: "none" });
-								buttonLabel.setText(sendingLabel(runtime.name));
-							},
-							onSent: (threadUrl) => {
-								button.disabled = false;
-								buttonLabel.setText(sentLabel(runtime.name));
-								// R1: href only ever carries a URL `openThreadUrl` would
-								// actually open — never a disallowed scheme (file,
-								// javascript, data, vbscript), even though the link
-								// itself still shows and stays clickable whenever a
-								// template exists (GP6/G9).
-								currentThreadUrl = threadUrl;
-								threadLink.setAttr("href", threadLinkHref(threadUrl));
-								threadLink.setCssStyles({ display: threadUrl ? "inline" : "none" });
-							},
-							// G12: every failure before the hand-off is accepted
-							// runs the button exactly as target: terminal would —
-							// see runTerminalFlow above.
-							fallbackToTerminal: () => {
-								button.disabled = false;
-								buttonLabel.setText(spec.text);
-								threadLink.setCssStyles({ display: "none" });
-								runTerminalFlow();
-							},
-						}
-					);
+		const runRuntimeFlow = createRuntimeFlow({
+			ui: {
+				showSending: (label) => {
+					button.disabled = true;
+					threadLink.setCssStyles({ display: "none" });
+					buttonLabel.setText(label);
 				},
-			});
+				showSent: (label, threadUrl) => {
+					button.disabled = false;
+					buttonLabel.setText(label);
+					// R1: href only ever carries a URL `openThreadUrl` would
+					// actually open — never a disallowed scheme (file,
+					// javascript, data, vbscript), even though the link
+					// itself still shows and stays clickable whenever a
+					// template exists (GP6/G9).
+					currentThreadUrl = threadUrl;
+					threadLink.setAttr("href", threadLinkHref(threadUrl));
+					threadLink.setCssStyles({ display: threadUrl ? "inline" : "none" });
+				},
+				showIdle: () => {
+					button.disabled = false;
+					buttonLabel.setText(spec.text);
+					threadLink.setCssStyles({ display: "none" });
+				},
+			},
+			getVaultBasePath: () => plugin.getVaultBasePath(),
+			renderPrompt: (cwd) => {
+				const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
+				const rendered = renderPromptTemplate(spec.prompt, context, {
+					allowJs: plugin.settings.allowJsExpressions,
+				});
+				return { text: rendered.text, error: rendered.error, noteBasename: context.file.basename };
+			},
+			sourcePath: ctx.sourcePath,
+			agentIdOverride: spec.agentId,
+			getOpenRequested: () => spec.open ?? plugin.settings.defaultOpen,
+			secretStore,
+			createHttpFn: createObsidianHttpFn,
+			runHandoff: sendHandoff,
+			nowMs: () => Date.now(),
+			openUrl: (url) => window.open(url),
+			notify: (message) => new Notice(message),
+			setTimer: (callback, ms) => window.setTimeout(callback, ms),
+			// G12: every failure before the hand-off is accepted runs the
+			// button exactly as target: terminal would — see createTerminalFlow.
+			runTerminalFlow,
 		});
+
+		button.addEventListener(
+			"click",
+			createClickHandler({
+				spec,
+				getSettings: () => plugin.settings,
+				secretStore,
+				notify: (message) => new Notice(message),
+				runTerminalFlow,
+				runRuntimeFlow,
+			})
+		);
 
 		completeBtn.addEventListener("click", (evt) => {
 			evt.stopPropagation();

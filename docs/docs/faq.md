@@ -30,11 +30,13 @@ Every fallback shows a notice naming the reason, then runs the button in the ter
 
 | Notice | Fix |
 |---|---|
-| `Unknown target "<name>" — running the default target instead.` | The `target:` name doesn't match any configured runtime — check **Agent runtimes** in Settings, or fix the typo in the button. |
+| `<name> returned status <N>.` | The runtime answered, but not with a success: a non-2xx status, or (OpenClaw hook) a `200` without `ok: true` and a `runId`. Check the runtime's own logs. |
 | `<name> isn't reachable, running here` | The runtime's HTTP server isn't running, or isn't reachable at its configured base URL — start/check it there, outside Obsidian. |
 | `token rejected` | The token Settings has for this runtime, on this device, was rejected (401/403) — re-enter the correct one. |
 | `Token not set on this device for "<name>".` | No token is stored for this runtime on this device — settings synced from elsewhere carry the runtime's configuration but never its token; enter it in Settings here. |
 | `OpenClaw rejected the session key: enable allowRequestSessionKey and allow the inline: prefix` | On the OpenClaw side, turn on `allowRequestSessionKey` and add `"inline:"` to `allowedSessionKeyPrefixes`. |
+
+A button whose `target:` names a runtime that isn't configured is different: it shows `Unknown target "<name>" — running the default target instead.` and runs the **Default target** — the terminal only if that's what the Default target is set to. Check the spelling against **Agent runtimes** in Settings, or fix the button.
 
 ## The plugin needs `python3` — is that a problem?
 

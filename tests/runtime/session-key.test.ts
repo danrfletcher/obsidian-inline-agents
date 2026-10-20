@@ -58,3 +58,12 @@ test("G8: the same basename and epoch ms always produce the same key (determinis
 test("splitSessionKeyPath splits the session key on ':' into path segments", () => {
 	assert.deepEqual(splitSessionKeyPath("inline:weekly-review:1700000000000"), ["inline", "weekly-review", "1700000000000"]);
 });
+
+test("R8: an astral character (emoji) becomes one '-', not two", () => {
+	assert.equal(sanitiseBasename("a😀b"), "a-b");
+	assert.equal(sanitiseBasename("😀😀"), "--");
+});
+
+test("R8: a basename that is empty falls back to 'note' (judgement call, not in the ticket)", () => {
+	assert.equal(sanitiseBasename(""), "note");
+});

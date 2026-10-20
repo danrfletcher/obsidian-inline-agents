@@ -86,3 +86,24 @@ test("R1: threadLinkHref is '#' (never the raw URL) for a disallowed scheme, in 
 		assert.equal(threadLinkHref(`${scheme}:something`), "#");
 	}
 });
+
+test("R7: an agentId override containing '/', '?' or '#' is URI-encoded and can't change the URL's structure", () => {
+	const url = buildThreadUrl("https://example.com/agents/{agentId}/threads/{sessionKey}", {
+		agentId: "a/b?x=1#frag",
+		sessionKey: "inline:weekly:1000",
+	});
+	assert.equal(url, "https://example.com/agents/a%2Fb%3Fx%3D1%23frag/threads/inline:weekly:1000");
+	const parsed = new URL(url ?? "");
+	assert.equal(parsed.search, "");
+	assert.equal(parsed.hash, "");
+});
+
+test("R7: an agentId that looks like another placeholder is not substituted a second time", () => {
+	const url = buildThreadUrl("hermes://{agentId}/{sessionKey}", { agentId: "{sessionKey}", sessionKey: "inline:n:1" });
+	assert.equal(url, "hermes://%7BsessionKey%7D/inline:n:1");
+});
+
+test("R7: {sessionKey} and {sessionKeyPath} keep their documented shape (the key is sanitised at creation, so needs no encoding)", () => {
+	const url = buildThreadUrl("hermes://t/{sessionKey}|{sessionKeyPath}", { agentId: "main", sessionKey: "inline:weekly-review:1000" });
+	assert.equal(url, "hermes://t/inline:weekly-review:1000|inline/weekly-review/1000");
+});

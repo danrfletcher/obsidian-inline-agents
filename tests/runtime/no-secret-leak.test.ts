@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { createHandoffRunner, sendingLabel, sentLabel } from "../../src/runtime/handoff";
 import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
@@ -56,18 +56,13 @@ function baseInput(runtime: AgentRuntime): HandoffInput {
  */
 function spyOnConsole(surface: string[]): () => void {
 	const methods = ["log", "warn", "error", "info", "debug"] as const;
-	const originals = methods.map((m) => console[m]);
-	for (const m of methods) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		(console as any)[m] = (...args: unknown[]) => {
+	const mocks = methods.map((method) =>
+		mock.method(console, method, (...args: unknown[]) => {
 			surface.push(args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" "));
-		};
-	}
+		})
+	);
 	return () => {
-		methods.forEach((m, i) => {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			(console as any)[m] = originals[i];
-		});
+		mocks.forEach((m) => m.mock.restore());
 	};
 }
 
@@ -91,6 +86,10 @@ function makeSweepingHooks(runtime: AgentRuntime, httpFn: HttpFn): { hooks: Hand
 			if (threadUrl) surface.push(threadUrl);
 		},
 		fallbackToTerminal: () => {},
+		onAborted: () => {},
+		setTimer: (callback, ms) => {
+			setTimeout(callback, ms);
+		},
 	};
 	return { hooks, surface };
 }
@@ -214,10 +213,12 @@ test("F5/R3: a late chat failure after the 5s settle never leaks the token, and 
 			// here", bare "token rejected") must never appear once
 			// settled — see R2.
 			const lateNotice = surface.find((s) => /no fallback ran/.test(s));
-			if (lateNotice) {
-				assert.doesNotMatch(lateNotice, /running here/);
-				assert.notEqual(lateNotice, "token rejected");
-			}
+			// Asserted defined (not guarded by `if`) so this check can
+			// never silently become vacuous if the late notice stops
+			// firing, or fires after the flush above.
+			assert.ok(lateNotice !== undefined, "the late-failure notice must have fired");
+			assert.doesNotMatch(lateNotice, /running here/);
+			assert.notEqual(lateNotice, "token rejected");
 		});
 	}
 });

@@ -141,3 +141,51 @@ test("E2: timeout, refused and error outcomes are all classified as unreachable"
 	assert.deepEqual(classifyHookOutcome({ kind: "refused" }), { kind: "unreachable" });
 	assert.deepEqual(classifyHookOutcome({ kind: "error", reason: "request failed" }), { kind: "unreachable" });
 });
+
+test("G14/E12: a plain-text 400 about the session-key policy is classified as sessionKeyRejected", () => {
+	const outcome: HttpOutcome = {
+		kind: "response",
+		status: 400,
+		body: "sessionKey override rejected: allowRequestSessionKey is disabled",
+	};
+	assert.deepEqual(classifyHookOutcome(outcome), { kind: "sessionKeyRejected" });
+});
+
+test("G14/E12: a 400 with the message nested under error.message is classified as sessionKeyRejected", () => {
+	const outcome: HttpOutcome = {
+		kind: "response",
+		status: 400,
+		body: JSON.stringify({ error: { message: "session key prefix not allowed by policy", type: "invalid_request" } }),
+	};
+	assert.deepEqual(classifyHookOutcome(outcome), { kind: "sessionKeyRejected" });
+});
+
+test("G14/E12: a 400 with a top-level message field is classified as sessionKeyRejected", () => {
+	const outcome: HttpOutcome = {
+		kind: "response",
+		status: 400,
+		body: JSON.stringify({ ok: false, message: "allowRequestSessionKey must be enabled" }),
+	};
+	assert.deepEqual(classifyHookOutcome(outcome), { kind: "sessionKeyRejected" });
+});
+
+test("E4: a plain-text or nested-message 400 that isn't about the session key stays a bare status 400", () => {
+	assert.deepEqual(classifyHookOutcome({ kind: "response", status: 400, body: "bad request" }), { kind: "httpError", status: 400 });
+	assert.deepEqual(
+		classifyHookOutcome({ kind: "response", status: 400, body: JSON.stringify({ error: { message: "unknown agentId" } }) }),
+		{ kind: "httpError", status: 400 }
+	);
+	assert.deepEqual(classifyHookOutcome({ kind: "response", status: 400 }), { kind: "httpError", status: 400 });
+});
+
+test("G14: the hook request asks for its response body to be read (it parses ok / runId)", () => {
+	const request = buildHookRequest({
+		baseUrl: "http://x",
+		token: undefined,
+		agentId: "main",
+		name: "n",
+		sessionKey: "inline:n:1",
+		message: "m",
+	});
+	assert.equal(request.readBody, true);
+});

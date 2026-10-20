@@ -3,11 +3,13 @@ import type AgentConsolePlugin from "./main";
 import type { AgentKind } from "./agents";
 import { checkBinaryAvailable, listOpenCodeModels, resolveBinary, CLAUDE_CANDIDATES, OPENCODE_CANDIDATES } from "./runner";
 import { CLAUDE_MODEL_OPTIONS } from "./settingsModel";
+import { OpenCodeModelLoader } from "./openCodeModelLoader";
 import type { AgentRuntime, RuntimeKind } from "./runtime/types";
 import { validateBaseUrl, validateRuntimeName, validateThreadUrlTemplate } from "./runtime/validation";
 import { testConnection } from "./runtime/testConnection";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
 import { removeRuntime } from "./runtime/removeRuntime";
+import { createBlankRuntime, renameRuntime, validateRuntimeCommit } from "./runtime/runtimeEdit";
 
 export type { ModelMapping, AgentConsoleSettings } from "./settingsModel";
 export { DEFAULT_SETTINGS, CLAUDE_MODEL_OPTIONS } from "./settingsModel";
@@ -33,8 +35,23 @@ type ConnectionStatus = "checking" | "connected" | "disconnected";
 export class AgentConsoleSettingTab extends PluginSettingTab {
 	plugin: AgentConsolePlugin;
 	private statusDots: Partial<Record<ProviderKey, HTMLElement>> = {};
-	private openCodeModelCache: string[] = [];
-	private openCodeModelsLoading = false;
+	// Owns OpenCode's model list and the "fetch at most once per tab open"
+	// rule that stops a render → fetch → render loop (see the class).
+	private readonly openCodeModels = new OpenCodeModelLoader(async () => {
+		let cwd: string;
+		try {
+			cwd = this.plugin.getVaultBasePath();
+		} catch {
+			return [];
+		}
+		return listOpenCodeModels(this.resolvedBinary("opencode"), cwd);
+	});
+	// A runtime row added with "Add runtime" but not yet valid (no name or
+	// no base URL). Lives only here, in memory: it is written to data.json
+	// (moved into settings.runtimes) the moment it becomes valid, and
+	// dropped if the tab is closed first — so a blank or half-filled row
+	// never gets saved (E14).
+	private draftRuntime: AgentRuntime | null = null;
 	// Every open model-picker popover, so a single document-level click
 	// listener can close whichever ones the click landed outside of. One
 	// listener bound once in the constructor rather than one per row per
@@ -53,11 +70,25 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
+	// True between display() and hide(); a fetch that finishes after the tab
+	// was closed must not re-render it (that would re-add the document
+	// click listener hide() just removed).
+	private isOpen = false;
+
+	private redrawIfOpen(): void {
+		if (this.isOpen) this.display();
+	}
+
 	hide(): void {
+		this.isOpen = false;
+		this.draftRuntime = null;
+		// Next time the tab opens, fetch the model list afresh (once).
+		this.openCodeModels.reset();
 		document.removeEventListener("click", this.handleDocumentClick);
 	}
 
 	display(): void {
+		this.isOpen = true;
 		const { containerEl } = this;
 		containerEl.empty();
 		this.openPickers = [];
@@ -137,7 +168,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				"behaviour as Claude Code above applies if this path doesn't exist in the current environment.",
 			binaryPlaceholder: "/usr/local/bin/opencode",
 			modelOptionsDesc: "Live list from `opencode models` — covers every provider OpenCode is currently configured for (including a local Ollama provider, if you've set one up).",
-			getModelOptions: () => this.openCodeModelCache,
+			getModelOptions: () => this.openCodeModels.models,
 			modelPlaceholder: "model string, e.g. ollama/qwen3.8:27b-mlx",
 		});
 	}
@@ -181,28 +212,19 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		);
 
 		const listEl = containerEl.createDiv({ cls: "agent-console-runtime-list" });
-		this.plugin.settings.runtimes.forEach((_, index) => this.renderRuntimeRow(listEl, index));
+		this.plugin.settings.runtimes.forEach((runtime) => this.renderRuntimeRow(listEl, runtime));
+		if (this.draftRuntime) this.renderRuntimeRow(listEl, this.draftRuntime);
 
 		new Setting(containerEl).addButton((btn) =>
 			btn
 				.setButtonText("Add runtime")
 				.setCta()
 				.onClick(() => {
-					void (async () => {
-						const runtime: AgentRuntime = {
-							id: crypto.randomUUID(),
-							name: "",
-							kind: "openclaw-hook",
-							baseUrl: "",
-							agentId: "",
-							tokenRequired: true,
-							sendSessionKeyHeader: false,
-							threadUrlTemplate: "",
-						};
-						this.plugin.settings.runtimes.push(runtime);
-						await this.plugin.saveSettings();
-						this.display();
-					})();
+					// One unsaved draft at a time: a second click while a
+					// blank row is still open must not add another blank row.
+					if (this.draftRuntime) return;
+					this.draftRuntime = createBlankRuntime(crypto.randomUUID());
+					this.display();
 				})
 		);
 	}
@@ -213,24 +235,46 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		return typeof value === "string" && value.trim() !== "";
 	}
 
-	private renderRuntimeRow(listEl: HTMLElement, index: number): void {
-		const runtime = this.plugin.settings.runtimes[index];
-		const card = listEl.createDiv({ cls: "agent-console-runtime-card" });
+	/**
+	 * Saves a runtime edit. A saved runtime is written straight away; the
+	 * draft is written (and moves into settings.runtimes) only once it has a
+	 * valid name and base URL, and until then nothing is saved.
+	 */
+	private async persistRuntime(runtime: AgentRuntime): Promise<void> {
+		if (runtime === this.draftRuntime) {
+			if (!validateRuntimeCommit(runtime, this.plugin.settings.runtimes).ok) return;
+			this.draftRuntime = null;
+			this.plugin.settings.runtimes.push(runtime);
+		}
+		await this.plugin.saveSettings();
+	}
 
-		const nameSetting = new Setting(card).setName("Name").setDesc('Matched case-insensitively against a button\'s "target:" line.');
+	private renderRuntimeRow(listEl: HTMLElement, runtime: AgentRuntime): void {
+		const card = listEl.createDiv({ cls: "agent-console-runtime-card" });
+		const isDraft = runtime === this.draftRuntime;
+
+		const nameSetting = new Setting(card)
+			.setName("Name")
+			.setDesc(
+				isDraft
+					? 'Not saved yet — needs a name and a valid base URL. Matched case-insensitively against a button\'s "target:" line.'
+					: 'Matched case-insensitively against a button\'s "target:" line.'
+			);
 		nameSetting.addText((text) =>
 			text
 				.setPlaceholder("openclaw")
 				.setValue(runtime.name)
 				.onChange(async (value) => {
-					const result = validateRuntimeName(value, this.plugin.settings.runtimes, index);
+					const result = validateRuntimeName(value, this.plugin.settings.runtimes, this.plugin.settings.runtimes.indexOf(runtime));
 					if (!result.ok) {
 						nameSetting.setErrorMessage(result.reason);
 						return;
 					}
 					nameSetting.setErrorMessage(null);
-					runtime.name = value.trim();
-					await this.plugin.saveSettings();
+					// A rename carries through to the Default target when
+					// this runtime is it (see renameRuntime).
+					renameRuntime(this.plugin.settings, runtime, value);
+					await this.persistRuntime(runtime);
 				})
 		);
 
@@ -242,7 +286,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					.setValue(runtime.kind)
 					.onChange(async (value) => {
 						runtime.kind = value as RuntimeKind;
-						await this.plugin.saveSettings();
+						await this.persistRuntime(runtime);
 						this.display();
 					})
 			);
@@ -260,7 +304,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					}
 					baseUrlSetting.setErrorMessage(null);
 					runtime.baseUrl = value.trim();
-					await this.plugin.saveSettings();
+					await this.persistRuntime(runtime);
 				})
 		);
 
@@ -273,7 +317,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					.setValue(runtime.agentId)
 					.onChange(async (value) => {
 						runtime.agentId = value.trim();
-						await this.plugin.saveSettings();
+						await this.persistRuntime(runtime);
 					})
 			);
 
@@ -283,7 +327,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			.addToggle((toggle) =>
 				toggle.setValue(runtime.tokenRequired).onChange(async (value) => {
 					runtime.tokenRequired = value;
-					await this.plugin.saveSettings();
+					await this.persistRuntime(runtime);
 				})
 			);
 
@@ -294,7 +338,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.addToggle((toggle) =>
 					toggle.setValue(runtime.sendSessionKeyHeader).onChange(async (value) => {
 						runtime.sendSessionKeyHeader = value;
-						await this.plugin.saveSettings();
+						await this.persistRuntime(runtime);
 					})
 				);
 		}
@@ -317,7 +361,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			secret.setValue(runtime.tokenSecretName ?? "");
 			secret.onChange(async (value) => {
 				runtime.tokenSecretName = value.trim();
-				await this.plugin.saveSettings();
+				await this.persistRuntime(runtime);
 				const nowHasToken = this.hasTokenOnThisDevice(runtime);
 				tokenSetting.settingEl.toggleClass("agent-console-runtime-token-missing", runtime.tokenRequired && !nowHasToken);
 				tokenSetting.setDesc(
@@ -344,7 +388,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					}
 					threadUrlSetting.setErrorMessage(null);
 					runtime.threadUrlTemplate = value.trim();
-					await this.plugin.saveSettings();
+					await this.persistRuntime(runtime);
 				})
 		);
 
@@ -372,9 +416,16 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.setWarning()
 				.onClick(() => {
 					void (async () => {
-						removeRuntime(this.plugin.settings, index, {
-							clearSecret: (name) => this.plugin.app.secretStorage.setSecret(name, ""),
-						});
+						if (runtime === this.draftRuntime) {
+							// Never saved, so there's nothing to remove from
+							// settings.
+							this.draftRuntime = null;
+							this.display();
+							return;
+						}
+						// The token secret is left in Obsidian's shared secret
+						// storage on purpose — see removeRuntime's docstring.
+						removeRuntime(this.plugin.settings, this.plugin.settings.runtimes.indexOf(runtime));
 						await this.plugin.saveSettings();
 						this.display();
 					})();
@@ -414,21 +465,6 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		this.setStatus(key, ok ? "connected" : "disconnected");
 	}
 
-	private async refreshOpenCodeModels(onUpdate: () => void): Promise<void> {
-		if (this.openCodeModelsLoading) return;
-		this.openCodeModelsLoading = true;
-		let cwd: string;
-		try {
-			cwd = this.plugin.getVaultBasePath();
-		} catch {
-			this.openCodeModelsLoading = false;
-			return;
-		}
-		this.openCodeModelCache = await listOpenCodeModels(this.resolvedBinary("opencode"), cwd);
-		this.openCodeModelsLoading = false;
-		onUpdate();
-	}
-
 	private renderProviderSection(
 		containerEl: HTMLElement,
 		opts: {
@@ -452,7 +488,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.onClick(() => {
 					void this.refreshStatus(opts.key);
 					if (opts.key === "opencode") {
-						void this.refreshOpenCodeModels(() => this.display());
+						void this.openCodeModels.refresh(() => this.redrawIfOpen());
 					}
 				})
 		);
@@ -471,8 +507,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 			);
 
 		void this.refreshStatus(opts.key);
-		if (opts.key === "opencode" && this.openCodeModelCache.length === 0 && !this.openCodeModelsLoading) {
-			void this.refreshOpenCodeModels(() => this.display());
+		if (opts.key === "opencode") {
+			void this.openCodeModels.ensureLoaded(() => this.redrawIfOpen());
 		}
 
 		const mappingsHeader = new Setting(containerEl)

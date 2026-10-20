@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHandoffRunner, createSingleFlightHandoff } from "../../src/runtime/handoff";
+import { createHandoffRunner, createSingleFlightHandoff, handoffAbortedNotice } from "../../src/runtime/handoff";
+import { createClickHandler } from "../../src/runtime/clickFlow";
 import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
 import type { AgentRuntime, HttpFn, HttpOutcome, HttpRequest } from "../../src/runtime/types";
 
@@ -49,6 +50,7 @@ interface Recorder {
 	sendingCalls: number;
 	sentUrls: (string | undefined)[];
 	fallbackCalls: number;
+	abortedCalls: number;
 	openedUrls: string[];
 	hooks: HandoffHooks;
 }
@@ -62,6 +64,7 @@ function makeRecorder(httpFn: HttpFn, nowMs: () => number = () => 1000): Recorde
 		sendingCalls: 0,
 		sentUrls,
 		fallbackCalls: 0,
+		abortedCalls: 0,
 		openedUrls,
 		hooks: {
 			httpFn,
@@ -75,6 +78,14 @@ function makeRecorder(httpFn: HttpFn, nowMs: () => number = () => 1000): Recorde
 			fallbackToTerminal: () => {
 				rec.fallbackCalls++;
 			},
+			onAborted: () => {
+				rec.abortedCalls++;
+			},
+			// Resolves the global `setTimeout` at call time, so a test's
+			// `mock.timers.enable` takes effect.
+			setTimer: (callback, ms) => {
+				setTimeout(callback, ms);
+			},
 		},
 	};
 	return rec;
@@ -87,10 +98,14 @@ function fakeHttpFn(outcome: HttpOutcome, captured: HttpRequest[] = []): HttpFn 
 	};
 }
 
-function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
 	let resolve!: (v: T) => void;
-	const promise = new Promise<T>((r) => (resolve = r));
-	return { promise, resolve };
+	let reject!: (e: unknown) => void;
+	const promise = new Promise<T>((res, rej) => {
+		resolve = res;
+		reject = rej;
+	});
+	return { promise, resolve, reject };
 }
 
 function flushMicrotasks(times = 6): Promise<void> {
@@ -439,4 +454,140 @@ test("G13: a late success after settling at 5s produces no extra notice", async 
 	assert.equal(rec.fallbackCalls, 0);
 	assert.equal(rec.notices.length, 0);
 	assert.equal(rec.sentUrls.length, 1);
+});
+
+
+// --- PR-1.F1 R4: anything that throws after onSending resets the button ----
+
+const LEAKY_ERROR = "boom: Bearer tok-SECRET-123 at http://internal/hooks/agent";
+
+test("R4: an HttpFn that rejects (hook kind) never rejects runHandoff — one fixed notice, then onAborted resets the button", async () => {
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(async () => {
+		throw new Error(LEAKY_ERROR);
+	});
+	await runner.runHandoff(baseInput(hookRuntime()), rec.hooks);
+	assert.equal(rec.sendingCalls, 1);
+	assert.equal(rec.abortedCalls, 1);
+	assert.deepEqual(rec.notices, [handoffAbortedNotice("openclaw")]);
+	assert.equal(rec.sentUrls.length, 0);
+	assert.equal(rec.fallbackCalls, 0, "an unexpected throw must not silently start a terminal run");
+	assert.ok(!rec.notices.join("").includes("SECRET"), "the thrown error's text is never surfaced");
+});
+
+test("R4: an HttpFn that rejects before 5s (chat kind) resets the button the same way", async () => {
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(async () => {
+		throw new Error(LEAKY_ERROR);
+	});
+	await runner.runHandoff(baseInput(chatRuntime()), rec.hooks);
+	assert.equal(rec.abortedCalls, 1);
+	assert.deepEqual(rec.notices, [handoffAbortedNotice("hermes")]);
+});
+
+test("R4: an HttpFn that rejects after the 5s settle is swallowed — no abort (the button already says Sent), no unhandled rejection", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const runner = createHandoffRunner();
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(() => pending.promise);
+	const unhandled: unknown[] = [];
+	const onUnhandled = (reason: unknown) => unhandled.push(reason);
+	process.on("unhandledRejection", onUnhandled);
+	try {
+		const runPromise = runner.runHandoff(baseInput(chatRuntime()), rec.hooks);
+		t.mock.timers.tick(5000);
+		await runPromise;
+		assert.equal(rec.sentUrls.length, 1);
+
+		pending.reject(new Error(LEAKY_ERROR));
+		await flushMicrotasks();
+		await new Promise((resolve) => setImmediate(resolve));
+	} finally {
+		process.off("unhandledRejection", onUnhandled);
+	}
+	assert.equal(rec.abortedCalls, 0);
+	assert.equal(rec.notices.length, 0);
+	assert.deepEqual(unhandled, []);
+});
+
+test("R4: openUrl throwing while opening the thread doesn't fail the hand-off — a notice, and the button still goes to Sent", async () => {
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(fakeHttpFn({ kind: "response", status: 200, body: JSON.stringify({ ok: true, runId: "r1" }) }));
+	rec.hooks.openUrl = () => {
+		throw new Error(LEAKY_ERROR);
+	};
+	await runner.runHandoff(baseInput(hookRuntime()), rec.hooks);
+	assert.equal(rec.sentUrls.length, 1, "onSent still ran");
+	assert.equal(rec.abortedCalls, 0);
+	assert.equal(rec.notices.length, 1);
+	assert.match(rec.notices[0], /Couldn't open the thread/);
+	assert.ok(!rec.notices[0].includes("SECRET"));
+});
+
+test("R4: onSent throwing is caught too — the button is reset rather than left stuck on Sending", async () => {
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(fakeHttpFn({ kind: "response", status: 200, body: JSON.stringify({ ok: true, runId: "r1" }) }));
+	rec.hooks.onSent = () => {
+		throw new Error("ui broke");
+	};
+	await runner.runHandoff(baseInput(hookRuntime()), rec.hooks);
+	assert.equal(rec.abortedCalls, 1);
+	assert.deepEqual(rec.notices, [handoffAbortedNotice("openclaw")]);
+});
+
+test("R4: if notify itself throws during the abort, runHandoff still resolves and still resets the button", async () => {
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(async () => {
+		throw new Error("x");
+	});
+	rec.hooks.notify = () => {
+		throw new Error("no notices available");
+	};
+	await runner.runHandoff(baseInput(hookRuntime()), rec.hooks);
+	assert.equal(rec.abortedCalls, 1);
+});
+
+test("R4: single-flight releases after an aborted hand-off, so the very next click runs normally", async () => {
+	const runner = createHandoffRunner();
+	let calls = 0;
+	const rec = makeRecorder(async () => {
+		calls++;
+		if (calls === 1) throw new Error("first fails");
+		return { kind: "response", status: 200, body: JSON.stringify({ ok: true, runId: "r1" }) };
+	});
+	const send = createSingleFlightHandoff(runner.runHandoff);
+	await send(baseInput(hookRuntime()), rec.hooks);
+	await send(baseInput(hookRuntime()), rec.hooks);
+	assert.equal(rec.abortedCalls, 1);
+	assert.equal(rec.sentUrls.length, 1);
+});
+
+// --- PR-1.F1 R5: the ignored-field notice, through the real click handler --
+
+test("G11: clicking a runtime-target button that sets terminal-only fields shows exactly one notice naming them, then hands off", () => {
+	const notices: string[] = [];
+	const handedOff: string[] = [];
+	createClickHandler({
+		spec: { target: "openclaw", model: "opus", autoApprove: true, completion: "responseEnd", agentOutput: "file", showTerminal: false },
+		getSettings: () => ({ runtimes: [hookRuntime()], defaultTarget: "terminal" }),
+		secretStore: { hasToken: () => true, getToken: () => undefined },
+		notify: (message) => notices.push(message),
+		runTerminalFlow: () => assert.fail("terminal must not run for a runtime target"),
+		runRuntimeFlow: (runtime) => handedOff.push(runtime.name),
+	})();
+	assert.deepEqual(notices, ['Ignored for runtime target "openclaw": model, autoApprove, agentOutput, completion, showTerminal.']);
+	assert.deepEqual(handedOff, ["openclaw"]);
+});
+
+test("G11: a runtime-target button that sets none of those fields shows no ignored-fields notice", () => {
+	const notices: string[] = [];
+	createClickHandler({
+		spec: { target: "openclaw" },
+		getSettings: () => ({ runtimes: [hookRuntime()], defaultTarget: "terminal" }),
+		secretStore: { hasToken: () => true, getToken: () => undefined },
+		notify: (message) => notices.push(message),
+		runTerminalFlow: () => {},
+		runRuntimeFlow: () => {},
+	})();
+	assert.deepEqual(notices, []);
 });

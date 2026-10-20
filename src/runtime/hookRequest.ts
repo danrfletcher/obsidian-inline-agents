@@ -38,7 +38,9 @@ export function buildHookRequest(params: HookRequestParams): HttpRequest {
 		sessionMode: "persistent",
 		deliver: false,
 	});
-	return { url: `${trimTrailingSlash(params.baseUrl)}/hooks/agent`, method: "POST", headers, body };
+	// readBody: the hook kind is the one caller that parses the reply (ok /
+	// runId, and the session-key-policy 400 wording).
+	return { url: `${trimTrailingSlash(params.baseUrl)}/hooks/agent`, method: "POST", headers, body, readBody: true };
 }
 
 export type HookSendResult = { kind: "ok"; runId: string } | HookFailureResult;
@@ -59,17 +61,40 @@ function safeParseJsonObject(text: string | undefined): Record<string, unknown> 
 	}
 }
 
+/** Longest slice of a non-JSON error body that is inspected — plenty for a policy sentence, bounded so a huge HTML error page isn't regex-scanned whole. */
+const MAX_ERROR_TEXT_CHARS = 2000;
+
+/**
+ * The human-readable error text of a 400 response, wherever it sits:
+ * `{ "error": "..." }`, `{ "error": { "message": "..." } }`,
+ * `{ "message": "..." }`, or — when the body isn't a JSON object at all — the
+ * plain response text itself. Only ever used to test against the policy
+ * pattern below; it never reaches a notice (F5).
+ */
+function extractErrorText(parsed: Record<string, unknown> | undefined, rawBody: string | undefined): string {
+	if (parsed) {
+		const error = parsed.error;
+		if (typeof error === "string") return error;
+		if (typeof error === "object" && error !== null) {
+			const nested = (error as Record<string, unknown>).message;
+			if (typeof nested === "string") return nested;
+		}
+		return typeof parsed.message === "string" ? parsed.message : "";
+	}
+	return (rawBody ?? "").slice(0, MAX_ERROR_TEXT_CHARS);
+}
+
 /**
  * G14/E12: OpenClaw's own wording for "the session-key policy isn't
  * enabled" isn't pinned down anywhere the ticket could verify (Q17, still
  * unverified at Dan's real server), so rather than match one fixed
  * sentence, this looks for the two concepts any such message has to
  * mention — a session key, and either the `allowRequestSessionKey` flag
- * or the "inline:" prefix allow-list — in whatever `error` text a 400
- * response carries.
+ * or the "inline:" prefix allow-list — in whatever error text a 400
+ * response carries (JSON string, nested `error.message`, or plain text).
  */
-function isSessionKeyPolicyError(body: Record<string, unknown> | undefined): boolean {
-	const text = typeof body?.error === "string" ? body.error : "";
+function isSessionKeyPolicyError(parsed: Record<string, unknown> | undefined, rawBody: string | undefined): boolean {
+	const text = extractErrorText(parsed, rawBody);
 	if (!text) return false;
 	return /allowRequestSessionKey/i.test(text) || (/session.?key/i.test(text) && /(allow|prefix|polic|disabled|not enabled)/i.test(text));
 }
@@ -77,8 +102,7 @@ function isSessionKeyPolicyError(body: Record<string, unknown> | undefined): boo
 /**
  * Normalizes the raw HttpOutcome of a hook send into exactly the cases the
  * hand-off flow needs to react to (G14, E3, E4, E12) — the response body
- * is only ever inspected here, to test for the one known policy-error
- * shape and to read `ok`/`runId`; it never reaches a notice or any other
+ * is only ever inspected here, to test for the policy-error wording and to read `ok`/`runId`; it never reaches a notice or any other
  * caller (F5), and a malformed/unparsable body is treated the same as "no
  * runId" rather than thrown.
  */
@@ -92,7 +116,7 @@ export function classifyHookOutcome(outcome: HttpOutcome): HookSendResult {
 			const { status, body } = outcome;
 			if (status === 401 || status === 403) return { kind: "unauthorized" };
 			const parsed = safeParseJsonObject(body);
-			if (status === 400 && isSessionKeyPolicyError(parsed)) return { kind: "sessionKeyRejected" };
+			if (status === 400 && isSessionKeyPolicyError(parsed, body)) return { kind: "sessionKeyRejected" };
 			if (status < 200 || status >= 300) return { kind: "httpError", status };
 			const runId = parsed?.runId;
 			if (parsed?.ok === true && typeof runId === "string" && runId.length > 0) {

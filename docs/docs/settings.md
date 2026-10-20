@@ -34,7 +34,7 @@ A second way to run a button — hand its prompt off to an HTTP agent runtime (O
 |---|---|---|
 | **Default target** | dropdown, `Terminal` plus every configured runtime name | What a button without a `target:` line uses, and what an unknown `target:` name falls back to. |
 | **(toggle next to it)** | on by default | The default for a button's `open:` line when it's missing or malformed. |
-| Per runtime: **Name**, **Kind** (OpenClaw hook / OpenAI-compatible chat), **Base URL**, **Agent ID or model**, **Token required**, **Send session key as `x-openclaw-session-key`** (chat kind only), **Token** (masked, per-device secret storage), **Thread-URL template** | — | Add, edit or remove a runtime (no reordering — remove and re-add to change order). Two runtimes can't share a name. |
+| Per runtime: **Name**, **Kind** (OpenClaw hook / OpenAI-compatible chat), **Base URL**, **Agent ID or model**, **Token required**, **Send session key as `x-openclaw-session-key`** (chat kind only), **Token** (masked, per-device secret storage), **Thread-URL template** | — | Add, edit or remove a runtime (no reordering — remove and re-add to change order). Two runtimes can't share a name. A new runtime isn't saved until it has a valid name and base URL; renaming the Default target's runtime updates the Default target. |
 | **Test connection** | button, per runtime | Checks reachability and the token without sending a prompt. |
 
 ## Where each setting lives in the source

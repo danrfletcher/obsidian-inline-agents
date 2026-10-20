@@ -12,13 +12,21 @@ export interface ThreadUrlVars {
  * separator for a URL path) into a runtime's thread-URL template. Returns
  * undefined when there's no template to fill at all (E5: fire-and-forget,
  * nothing to open).
+ *
+ * `{agentId}` is URI-encoded: it can come from a button's free-text
+ * `agentId:` override, and a "/", "?" or "#" in it must not change the
+ * URL's structure. `{sessionKey}` / `{sessionKeyPath}` are inserted as-is:
+ * the plugin builds the key itself from a basename sanitised to
+ * [a-z0-9_-] plus ":" separators and an epoch (see sessionKey.ts), so it
+ * can't contain a URL-structural character, and encoding the ":" would
+ * change the documented URL shape.
  */
 export function buildThreadUrl(template: string | undefined, vars: ThreadUrlVars): string | undefined {
 	const trimmed = (template ?? "").trim();
 	if (!trimmed) return undefined;
 	const sessionKeyPath = splitSessionKeyPath(vars.sessionKey).join("/");
 	return trimmed
-		.replace(/\{agentId\}/g, vars.agentId)
+		.replace(/\{agentId\}/g, () => encodeURIComponent(vars.agentId))
 		.replace(/\{sessionKeyPath\}/g, sessionKeyPath)
 		.replace(/\{sessionKey\}/g, vars.sessionKey);
 }
