@@ -40,6 +40,21 @@ export interface HandoffHooks {
 	onSent: (threadUrl: string | undefined) => void;
 	/** G12: runs the button as the terminal would have, before any runtime routing existed. */
 	fallbackToTerminal: () => void;
+	/**
+	 * Called (after a fixed notice) when something unexpected throws part-way
+	 * through a hand-off — an `HttpFn` that rejects, a `window.open` that
+	 * throws, a hook that throws. Restores the button to its idle label and
+	 * enabled state, so a failure after `onSending` can never leave the
+	 * button stuck on "Sending to <name>…".
+	 */
+	onAborted: () => void;
+	/**
+	 * `window.setTimeout`, injected (rather than a bare `setTimeout`) so the
+	 * plugin uses the popout-window-safe timer in production while a test
+	 * can pass a stand-in driven by `node:test`'s mock timers. Only the
+	 * chat kind's 5-second rule (G12) needs a timer.
+	 */
+	setTimer: (callback: () => void, ms: number) => void;
 }
 
 function hookFailureNotice(name: string, result: HookFailureResult): string {
@@ -88,6 +103,15 @@ function lateChatFailureNotice(name: string, result: ChatFailureResult): string 
 type RaceResult<T> = { via: "value"; value: T } | { via: "timer" };
 
 /**
+ * The one notice shown when something unexpected throws mid-hand-off. Fixed
+ * text on purpose (F5): the thrown error's own message could embed request
+ * detail, so it is never surfaced.
+ */
+export function handoffAbortedNotice(runtimeName: string): string {
+	return `Couldn't send to ${runtimeName}.`;
+}
+
+/**
  * R3: the exact button-label wording for "Sending to <name>…" (G7) and
  * "Sent to <name>" (G9, before the "↗" link/no-link decision which
  * buttonBlock.ts makes separately) — exported so both the real click
@@ -103,10 +127,10 @@ export function sentLabel(runtimeName: string): string {
 	return `Sent to ${runtimeName}`;
 }
 
-/** Races `promise` against a plain timer, without assuming anything about either resolving first — used for the chat kind's 5-second rule (G12). Uses the real global `setTimeout`, so a test can control it with `node:test`'s mock timers rather than this module needing its own clock abstraction. */
-function raceSettle<T>(promise: Promise<T>, ms: number): Promise<RaceResult<T>> {
+/** Races `promise` against a plain timer, without assuming anything about either resolving first — used for the chat kind's 5-second rule (G12). The timer comes from `setTimer` (see HandoffHooks), so a test can drive it with `node:test`'s mock timers. */
+function raceSettle<T>(promise: Promise<T>, ms: number, setTimer: HandoffHooks["setTimer"]): Promise<RaceResult<T>> {
 	const timer = new Promise<RaceResult<T>>((resolve) => {
-		setTimeout(() => resolve({ via: "timer" }), ms);
+		setTimer(() => resolve({ via: "timer" }), ms);
 	});
 	const value = promise.then((v): RaceResult<T> => ({ via: "value", value: v }));
 	return Promise.race([value, timer]);
@@ -129,8 +153,15 @@ export function createHandoffRunner(): {
 		const threadUrl = buildThreadUrl(input.runtime.threadUrlTemplate, { agentId, sessionKey });
 		if (threadUrl) {
 			if (input.openRequested) {
-				const openResult = openThreadUrl(threadUrl, hooks.openUrl);
-				if (!openResult.opened && openResult.reason) hooks.notify(openResult.reason);
+				// The prompt is already accepted by now, so a failure to
+				// open the thread must not look like a failed hand-off:
+				// say so and still go on to onSent below.
+				try {
+					const openResult = openThreadUrl(threadUrl, hooks.openUrl);
+					if (!openResult.opened && openResult.reason) hooks.notify(openResult.reason);
+				} catch {
+					hooks.notify(`Couldn't open the thread for "${input.runtime.name}".`);
+				}
 			}
 		} else if (input.openRequested && !warnedNoThreadUrl.has(input.runtime.id)) {
 			// E5: once per runtime per Obsidian session, not once per block or per click.
@@ -202,7 +233,7 @@ export function createHandoffRunner(): {
 		// everything the 5-second race itself needs to decide.
 		const rawOutcome = hooks.httpFn(request);
 		const classified = rawOutcome.then(classifyChatOutcome);
-		const race = await raceSettle(classified, CHAT_SETTLE_MS);
+		const race = await raceSettle(classified, CHAT_SETTLE_MS, hooks.setTimer);
 
 		if (race.via === "timer") {
 			// G12: 5 seconds with no error is settled.
@@ -213,11 +244,16 @@ export function createHandoffRunner(): {
 			// means the HttpFn's own ceiling (CHAT_HTTP_TIMEOUT_MS) fired
 			// while the run was likely still going on the runtime, not
 			// that anything is confirmed to have failed.
-			void Promise.all([rawOutcome, classified]).then(([raw, result]) => {
-				if (result.kind === "accepted") return;
-				if (raw.kind === "timeout") return;
-				hooks.notify(lateChatFailureNotice(input.runtime.name, result));
-			});
+			// The trailing catch swallows (never surfaces) anything this
+			// background step throws — nothing awaits it, so a rejection
+			// here would otherwise be an unhandled one.
+			void Promise.all([rawOutcome, classified])
+				.then(([raw, result]) => {
+					if (result.kind === "accepted") return;
+					if (raw.kind === "timeout") return;
+					hooks.notify(lateChatFailureNotice(input.runtime.name, result));
+				})
+				.catch(() => undefined);
 			return;
 		}
 
@@ -231,7 +267,7 @@ export function createHandoffRunner(): {
 		hooks.fallbackToTerminal();
 	}
 
-	async function runHandoff(input: HandoffInput, hooks: HandoffHooks): Promise<void> {
+	async function runHandoffUnguarded(input: HandoffInput, hooks: HandoffHooks): Promise<void> {
 		// E8: empty/whitespace-only prompt sends nothing, shows a notice,
 		// makes no request, and (unlike every other failure here) never
 		// reaches "Sending…" or the terminal fallback at all.
@@ -262,6 +298,32 @@ export function createHandoffRunner(): {
 			await runHookHandoff(input, hooks, agentId, sessionKey, message);
 		} else {
 			await runChatHandoff(input, hooks, agentId, sessionKey, message);
+		}
+	}
+
+	/**
+	 * Never rejects. Anything unexpected that throws (an `HttpFn` that
+	 * rejects instead of resolving, `window.open`, a hook callback) is caught
+	 * here: one fixed notice, then `onAborted` puts the button back to idle —
+	 * otherwise it would stay disabled on "Sending to <name>…" with the
+	 * rejection unhandled. The thrown error itself is deliberately dropped
+	 * (F5). If `notify` or `onAborted` themselves throw there is nothing
+	 * further to do, so that is swallowed too.
+	 */
+	async function runHandoff(input: HandoffInput, hooks: HandoffHooks): Promise<void> {
+		try {
+			await runHandoffUnguarded(input, hooks);
+		} catch {
+			try {
+				hooks.notify(handoffAbortedNotice(input.runtime.name));
+			} catch {
+				// nothing left to report to
+			}
+			try {
+				hooks.onAborted();
+			} catch {
+				// nothing left to reset
+			}
 		}
 	}
 
