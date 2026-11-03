@@ -125,8 +125,14 @@ export function createHandoffRunner(): {
 } {
 	const warnedNoThreadUrl = new Set<string>();
 
-	function settle(input: HandoffInput, hooks: HandoffHooks, agentId: string, sessionKey: string): void {
-		const threadUrl = buildThreadUrl(input.runtime.threadUrlTemplate, { agentId, sessionKey });
+	function settle(
+		input: HandoffInput,
+		hooks: HandoffHooks,
+		agentId: string,
+		sessionKey: string,
+		sessionId: string
+	): void {
+		const threadUrl = buildThreadUrl(input.runtime.threadUrlTemplate, { agentId, sessionKey, sessionId });
 		if (threadUrl) {
 			if (input.openRequested) {
 				const openResult = openThreadUrl(threadUrl, hooks.openUrl);
@@ -145,6 +151,7 @@ export function createHandoffRunner(): {
 		hooks: HandoffHooks,
 		agentId: string,
 		sessionKey: string,
+		sessionId: string,
 		message: string
 	): Promise<void> {
 		const request = buildHookRequest({
@@ -162,7 +169,7 @@ export function createHandoffRunner(): {
 		const outcome = await hooks.httpFn(request);
 		const result = classifyHookOutcome(outcome);
 		if (result.kind === "ok") {
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			return;
 		}
 		// G12/E2/E3/E4/E12: every failure before the hook accepts the prompt
@@ -209,7 +216,7 @@ export function createHandoffRunner(): {
 
 		if (race.via === "timer") {
 			// G12: 5 seconds with no error is settled.
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			// G13/R2: an error arriving after that is a notice only — the
 			// terminal never runs and the prompt is never run twice. A
 			// late *timeout* specifically isn't reported at all: it only
@@ -225,7 +232,7 @@ export function createHandoffRunner(): {
 		}
 
 		if (race.value.kind === "accepted") {
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			return;
 		}
 		// G12: an error inside the 5 seconds always falls back — a run that
@@ -256,15 +263,18 @@ export function createHandoffRunner(): {
 		hooks.onSending();
 
 		// G8: chosen once, before sending, so the same key appears in the
-		// request and (via settle() -> buildThreadUrl) the thread URL.
+		// request and (via settle() -> buildThreadUrl) the thread URL's
+		// `{sessionKey}` / `{sessionKeyPath}`.
 		const sessionKey = createSessionKey(input.noteBasename, hooks.nowMs());
-		// Derived here, once, from that same key; only the chat kind sends it.
+		// Derived here, once, from that same key. The chat request sends it
+		// when the runtime's toggle is on; the thread-URL builder fills
+		// `{sessionId}` with it for both kinds, toggle or no toggle.
 		const sessionId = createSessionId(sessionKey);
 		const agentId = input.agentIdOverride?.trim() || input.runtime.agentId;
 		const message = buildHandoffMessage(input.prompt, input.notePath, input.runtime.kind === "openclaw-hook");
 
 		if (input.runtime.kind === "openclaw-hook") {
-			await runHookHandoff(input, hooks, agentId, sessionKey, message);
+			await runHookHandoff(input, hooks, agentId, sessionKey, sessionId, message);
 		} else {
 			await runChatHandoff(input, hooks, agentId, sessionKey, sessionId, message);
 		}

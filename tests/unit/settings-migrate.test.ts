@@ -163,3 +163,21 @@ test("E13/G4: a runtime whose kind is switched to the hook kind keeps the stored
 	assert.equal(backToChat.runtimes[0].kind, "openai-chat");
 	assert.equal(backToChat.runtimes[0].sendSessionIdHeader, true);
 });
+
+// --- GP1: the Hermes thread-URL template ------------------------------
+
+test("GP1: hermes://open/{sessionId} validates, other custom schemes pass, the four disallowed ones are still refused", () => {
+	assert.equal(validateThreadUrlTemplate("hermes://open/{sessionId}").ok, true);
+	assert.equal(validateThreadUrlTemplate("hermes://open/sessions/{sessionId}").ok, true);
+	assert.equal(validateThreadUrlTemplate("file:///{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("javascript:{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("data:{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("vbscript:{sessionId}").ok, false);
+});
+
+test("GP1: the template survives a settings save and reload unchanged", () => {
+	const saved = hermesRuntime({ threadUrlTemplate: "hermes://open/{sessionId}", sendSessionIdHeader: true });
+	const reloaded = migrateSettings(JSON.parse(JSON.stringify({ runtimes: [saved] })));
+	assert.equal(reloaded.runtimes[0].threadUrlTemplate, "hermes://open/{sessionId}");
+	assert.deepEqual(reloaded.runtimes[0], saved);
+});

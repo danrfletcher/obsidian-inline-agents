@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHandoffRunner, createSingleFlightHandoff } from "../../src/runtime/handoff";
 import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
 import type { AgentRuntime, HttpFn, HttpOutcome, HttpRequest } from "../../src/runtime/types";
+import { openThreadUrl } from "../../src/runtime/threadUrl";
 
 function hookRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 	return {
@@ -540,4 +541,289 @@ test("added/E13: a hook runtime with the stored toggle on sends exactly what a r
 	assert.equal(withField[0].headers["X-Hermes-Session-Id"], undefined);
 	assert.ok(!(withField[0].body ?? "").includes(WEEKLY_ID));
 	assert.equal(JSON.parse(withField[0].body ?? "{}").sessionKey, WEEKLY_KEY);
+});
+
+// --- {sessionId} in the thread URL (G8, G9, GP2, GP5, GP7, E6, E7, F1-F5) ---
+
+const HERMES_TEMPLATE = "hermes://open/{sessionId}";
+const HERMES_URL = `hermes://open/${WEEKLY_ID}`;
+
+function hermesRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+	return chatRuntime({
+		baseUrl: "http://127.0.0.1:8642/v1",
+		threadUrlTemplate: HERMES_TEMPLATE,
+		...overrides,
+	});
+}
+
+test("GP2/GP5/G9: chat kind, toggle on and off: nothing opens before 5000 ms, then the exact id-based URL is opened and reported", async (t) => {
+	for (const sendSessionIdHeader of [true, false]) {
+		await t.test(`toggle ${sendSessionIdHeader ? "on" : "off"}`, async (st) => {
+			st.mock.timers.enable({ apis: ["setTimeout"] });
+			const captured: HttpRequest[] = [];
+			const pending = deferred<HttpOutcome>();
+			const rec = makeRecorder(async (request) => {
+				captured.push(request);
+				return pending.promise;
+			}, () => WEEKLY_MS);
+			const runPromise = createHandoffRunner().runHandoff(
+				weeklyInput(hermesRuntime({ sendSessionIdHeader })),
+				rec.hooks
+			);
+
+			assert.equal(rec.sendingCalls, 1);
+			st.mock.timers.tick(4999);
+			await flushMicrotasks();
+			assert.deepEqual(rec.openedUrls, []);
+			assert.deepEqual(rec.sentUrls, []);
+
+			st.mock.timers.tick(1);
+			await runPromise;
+			assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+			assert.deepEqual(rec.sentUrls, [HERMES_URL]);
+			assert.ok(!HERMES_URL.slice("hermes://".length).includes(":"));
+			// The reply has not arrived yet: opened mid-run, not after the reply.
+			assert.equal(captured.length, 1);
+			pending.resolve(OK_CHAT);
+			await flushMicrotasks();
+			assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+		});
+	}
+});
+
+test("GP5: open: false still reports the URL to onSent but opens nothing", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async () => pending.promise, () => WEEKLY_MS);
+	const runPromise = createHandoffRunner().runHandoff(
+		{ ...weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), openRequested: false },
+		rec.hooks
+	);
+	t.mock.timers.tick(5000);
+	await runPromise;
+	assert.deepEqual(rec.sentUrls, [HERMES_URL]);
+	assert.deepEqual(rec.openedUrls, []);
+});
+
+test("G8: the URL's id is the very id the request sends (toggle on): one derivation, two consumers", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const captured: HttpRequest[] = [];
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async (request) => {
+		captured.push(request);
+		return pending.promise;
+	}, () => WEEKLY_MS);
+	const runPromise = createHandoffRunner().runHandoff(
+		weeklyInput(hermesRuntime({ sendSessionIdHeader: true })),
+		rec.hooks
+	);
+	t.mock.timers.tick(5000);
+	await runPromise;
+	assert.equal(captured[0].headers["X-Hermes-Session-Id"], WEEKLY_ID);
+	assert.equal(rec.openedUrls[0], `hermes://open/${captured[0].headers["X-Hermes-Session-Id"]}`);
+});
+
+test("G8/F5: hook kind with {sessionId} in the template builds the same id-based URL, and its request equals the 0.3.1 fixture", async () => {
+	const captured: HttpRequest[] = [];
+	const rec = makeRecorder(fakeHttpFn(OK_HOOK, captured), () => WEEKLY_MS);
+	const runtime = hookRuntime({
+		baseUrl: "http://127.0.0.1:18789",
+		tokenRequired: true,
+		threadUrlTemplate: "hermes://open/{sessionId}",
+		// Whatever the toggles say, the hook request must not change.
+		sendSessionIdHeader: true,
+		sendSessionKeyHeader: true,
+	});
+	await createHandoffRunner().runHandoff(
+		{ ...baseInput(runtime, { noteBasename: "Weekly Review", notePath: "/vault/Weekly Review.md" }), prompt: "Summarise Weekly Review.md", token: "tok-SECRET-123" },
+		rec.hooks
+	);
+	assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+	assert.deepEqual(rec.sentUrls, [HERMES_URL]);
+
+	// Fixture copied from the output of the 0.3.1 sources (commit 54de3b4)
+	// for the same pinned input. The Idempotency-Key is random per build.
+	assert.equal(captured.length, 1);
+	const { "Idempotency-Key": idempotencyKey, ...stableHeaders } = captured[0].headers;
+	assert.match(idempotencyKey, /^[0-9a-f-]{36}$/);
+	assert.deepEqual({ ...captured[0], headers: stableHeaders }, {
+		url: "http://127.0.0.1:18789/hooks/agent",
+		method: "POST",
+		headers: { "Content-Type": "application/json", Authorization: "Bearer tok-SECRET-123" },
+		body: '{"message":"This is an instruction from the vault owner, sent by their Inline Agents button. Carry it out.\\nSummarise Weekly Review.md\\n\\nNote: /vault/Weekly Review.md","agentId":"main","name":"Weekly Review","sessionKey":"inline:weekly-review:1793618103221","sessionMode":"persistent","deliver":false}',
+	});
+});
+
+test("G8: old placeholders in a hook template still produce 0.3.1 URLs", async () => {
+	const rec = makeRecorder(fakeHttpFn(OK_HOOK), () => WEEKLY_MS);
+	const runtime = hookRuntime({ threadUrlTemplate: "openclaw://thread/{agentId}/{sessionKeyPath}?k={sessionKey}" });
+	await createHandoffRunner().runHandoff(weeklyInput(runtime), rec.hooks);
+	assert.deepEqual(rec.openedUrls, [`openclaw://thread/main/inline/weekly-review/1793618103221?k=${WEEKLY_KEY}`]);
+});
+
+test("GP7/E7: different nowMs give different URLs; the same nowMs and basename give identical ones (no guard, counter or suffix)", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const runner = createHandoffRunner();
+	const urls: string[] = [];
+	for (const now of [WEEKLY_MS, WEEKLY_MS + 1, WEEKLY_MS + 1]) {
+		const pending = deferred<HttpOutcome>();
+		const rec = makeRecorder(async () => pending.promise, () => now);
+		const runPromise = runner.runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+		t.mock.timers.tick(5000);
+		await runPromise;
+		urls.push(...(rec.openedUrls));
+	}
+	assert.equal(urls.length, 3);
+	assert.equal(urls[0], HERMES_URL);
+	assert.equal(urls[1], "hermes://open/inline-weekly-review-1793618103222");
+	assert.notEqual(urls[0], urls[1]);
+	// E7: documented behaviour. A second click in the same millisecond reuses the id.
+	assert.equal(urls[1], urls[2]);
+});
+
+test("GP7: reopening the ↗ is the same URL the hand-off reported (onSent carries what was opened)", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async () => pending.promise, () => WEEKLY_MS);
+	const runPromise = createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+	t.mock.timers.tick(5000);
+	await runPromise;
+	const reopened: string[] = [];
+	assert.deepEqual(openThreadUrl(rec.sentUrls[0] ?? "", (u) => reopened.push(u)), { opened: true });
+	assert.deepEqual(reopened, rec.openedUrls);
+});
+
+test("E6/F1: a late 5xx, late 401 and late timeout keep today's wording, open nothing more and send nothing more", async (t) => {
+	const cases: { name: string; outcome: HttpOutcome; notice: string | undefined }[] = [
+		{ name: "5xx", outcome: { kind: "response", status: 503 }, notice: "hermes returned status 503 after accepting the prompt — no fallback ran." },
+		{ name: "401", outcome: { kind: "response", status: 401 }, notice: "hermes rejected the token after accepting the prompt — no fallback ran." },
+		{ name: "timeout", outcome: { kind: "timeout" }, notice: undefined },
+	];
+	for (const c of cases) {
+		await t.test(c.name, async (st) => {
+			st.mock.timers.enable({ apis: ["setTimeout"] });
+			const captured: HttpRequest[] = [];
+			const pending = deferred<HttpOutcome>();
+			const rec = makeRecorder(async (request) => {
+				captured.push(request);
+				return pending.promise;
+			}, () => WEEKLY_MS);
+			const runPromise = createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+			st.mock.timers.tick(5000);
+			await runPromise;
+			assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+
+			pending.resolve(c.outcome);
+			await flushMicrotasks();
+			st.mock.timers.tick(60000);
+			await flushMicrotasks();
+
+			assert.deepEqual(rec.notices, c.notice ? [c.notice] : []);
+			assert.equal(rec.openedUrls.length, 1);
+			assert.equal(rec.sentUrls.length, 1);
+			assert.equal(captured.length, 1);
+			assert.equal(rec.fallbackCalls, 0);
+			assert.ok(rec.notices.every((n) => !n.includes(WEEKLY_ID)));
+		});
+	}
+});
+
+test("G9/guard: an early error (before 5 s) opens nothing and falls back to the terminal", async () => {
+	for (const outcome of [{ kind: "response", status: 500 }, { kind: "response", status: 401 }, { kind: "refused" }] as HttpOutcome[]) {
+		const pending = deferred<HttpOutcome>();
+		const rec = makeRecorder(async () => pending.promise, () => WEEKLY_MS);
+		const runPromise = createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+		pending.resolve(outcome);
+		await runPromise;
+		assert.deepEqual(rec.openedUrls, []);
+		assert.deepEqual(rec.sentUrls, []);
+		assert.equal(rec.fallbackCalls, 1);
+		assert.equal(rec.notices.length, 1);
+		assert.ok(!rec.notices[0].includes(WEEKLY_ID));
+	}
+});
+
+test("F2/F3/F4: the reply is never read; exactly one request per click, to <base>/chat/completions, with no profile selector", async (t) => {
+	for (const replyBeforeSettle of [true, false]) {
+		await t.test(replyBeforeSettle ? "reply inside 5 s" : "reply after settle", async (st) => {
+			st.mock.timers.enable({ apis: ["setTimeout"] });
+			const captured: HttpRequest[] = [];
+			const pending = deferred<HttpOutcome>();
+			const rec = makeRecorder(async (request) => {
+				captured.push(request);
+				return pending.promise;
+			}, () => WEEKLY_MS);
+			const reply: HttpOutcome = {
+				kind: "response",
+				status: 200,
+				body: JSON.stringify({ choices: [{ message: { role: "assistant", content: "REPLY-MARKER" } }] }),
+			};
+			const runPromise = createHandoffRunner().runHandoff(
+				{ ...weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), token: "tok-SECRET-123" },
+				rec.hooks
+			);
+			if (replyBeforeSettle) {
+				pending.resolve(reply);
+			} else {
+				st.mock.timers.tick(5000);
+			}
+			await runPromise;
+			if (!replyBeforeSettle) {
+				pending.resolve(reply);
+				await flushMicrotasks();
+			}
+
+			const everything = JSON.stringify({ notices: rec.notices, sent: rec.sentUrls, opened: rec.openedUrls });
+			assert.ok(!everything.includes("REPLY-MARKER"));
+			assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+
+			assert.equal(captured.length, 1);
+			assert.equal(captured[0].url, "http://127.0.0.1:8642/v1/chat/completions");
+			assert.equal(captured[0].method, "POST");
+			assert.deepEqual(Object.keys(captured[0].headers).sort(), ["Authorization", "Content-Type", "X-Hermes-Session-Id"]);
+			assert.ok(!Object.keys(captured[0].headers).some((h) => /profile/i.test(h)));
+			assert.ok(!/profile/i.test(captured[0].body ?? ""));
+			assert.equal(JSON.parse(captured[0].body ?? "{}").stream, false);
+		});
+	}
+});
+
+test("added: a disallowed-scheme template notice names the scheme and never contains the id; nothing opens", async (t) => {
+	for (const scheme of ["file", "javascript", "data", "vbscript"]) {
+		await t.test(scheme, async (st) => {
+			st.mock.timers.enable({ apis: ["setTimeout"] });
+			const pending = deferred<HttpOutcome>();
+			const rec = makeRecorder(async () => pending.promise, () => WEEKLY_MS);
+			const runPromise = createHandoffRunner().runHandoff(
+				weeklyInput(hermesRuntime({ sendSessionIdHeader: true, threadUrlTemplate: `${scheme}:{sessionId}` })),
+				rec.hooks
+			);
+			st.mock.timers.tick(5000);
+			await runPromise;
+			assert.deepEqual(rec.openedUrls, []);
+			assert.equal(rec.notices.length, 1);
+			assert.ok(rec.notices[0].includes(`"${scheme}:"`));
+			assert.ok(!rec.notices[0].includes(WEEKLY_ID));
+			assert.ok(!rec.notices[0].includes("inline"));
+		});
+	}
+});
+
+test("added: a click while a hand-off is in flight is still ignored (one request, one open)", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const captured: HttpRequest[] = [];
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async (request) => {
+		captured.push(request);
+		return pending.promise;
+	}, () => WEEKLY_MS);
+	const guarded = createSingleFlightHandoff(createHandoffRunner().runHandoff);
+	const input = weeklyInput(hermesRuntime({ sendSessionIdHeader: true }));
+	const first = guarded(input, rec.hooks);
+	const second = guarded(input, rec.hooks);
+	t.mock.timers.tick(5000);
+	await Promise.all([first, second]);
+	assert.equal(captured.length, 1);
+	assert.equal(rec.sendingCalls, 1);
+	assert.deepEqual(rec.openedUrls, [HERMES_URL]);
 });

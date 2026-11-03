@@ -40,7 +40,7 @@ export interface AgentRuntime {
 	 * which ignores it.
 	 */
 	sendSessionIdHeader?: boolean;
-	/** Optional URL used to open the thread; may use {agentId}, {sessionKey}, {sessionKeyPath}. */
+	/** Optional URL used to open the thread; may use {agentId}, {sessionKey}, {sessionKeyPath}, {sessionId}. */
 	threadUrlTemplate?: string;
 }
 
