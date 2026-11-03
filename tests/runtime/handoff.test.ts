@@ -4,6 +4,7 @@ import { createHandoffRunner, createSingleFlightHandoff } from "../../src/runtim
 import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
 import type { AgentRuntime, HttpFn, HttpOutcome, HttpRequest } from "../../src/runtime/types";
 import { openThreadUrl } from "../../src/runtime/threadUrl";
+import { HOOK_PREFACE } from "../../src/runtime/message";
 
 function hookRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 	return {
@@ -950,4 +951,21 @@ test("E12: both toggles on: the request carries x-openclaw-session-key and X-Her
 	);
 	assert.equal(captured[0].headers["x-openclaw-session-key"], WEEKLY_KEY);
 	assert.equal(captured[0].headers["X-Hermes-Session-Id"], WEEKLY_ID);
+});
+
+// --- `input:` typed text (G7, GP5) ----------------------------------------
+
+test("G7/GP5: typed text in HandoffInput.prompt reaches the request body unchanged, for both runtime kinds", async () => {
+	const typed = "Merge this ticket into $& $1 {{ file.path }} 合并\nsecond line \"quoted\" " + "y".repeat(5000);
+	for (const runtime of [hookRuntime(), chatRuntime()]) {
+		const captured: HttpRequest[] = [];
+		const rec = makeRecorder(fakeHttpFn({ kind: "response", status: 200, body: JSON.stringify({ ok: true, runId: "r1" }) }, captured));
+		await createHandoffRunner().runHandoff(baseInput(runtime, { prompt: typed }), rec.hooks);
+		assert.equal(captured.length, 1, runtime.kind);
+		const parsed = JSON.parse(captured[0].body ?? "{}");
+		const sent: string = runtime.kind === "openclaw-hook" ? parsed.message : parsed.messages[0].content;
+		assert.ok(sent.includes(typed), `${runtime.kind}: the message contains the typed text verbatim`);
+		assert.ok(sent.startsWith(runtime.kind === "openclaw-hook" ? HOOK_PREFACE : typed), runtime.kind);
+		assert.ok(sent.endsWith(`${typed}\n\nNote: /vault/weekly.md`), runtime.kind);
+	}
 });

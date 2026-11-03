@@ -4,6 +4,10 @@ The full, authoritative changelog is the project's [GitHub Releases page](https:
 
 ## Highlights
 
+### Unreleased
+
+- A button can now ask for text before it runs. Add an `input:` line and a click turns the button into a text field; what you submit becomes part of the prompt, in the new `{{ input }}` token's place (or on a new line after the prompt if it has none). The text goes unchanged to the terminal or an HTTP runtime. See [`input`](reference/fields.md#input).
+
 ### 0.3.2
 
 - New per-runtime toggle **Send session id as `X-Hermes-Session-Id`** (OpenAI-compatible chat kind only, default off). When on, the plugin sends a colon-free session id in that header and as the request's `user` field.

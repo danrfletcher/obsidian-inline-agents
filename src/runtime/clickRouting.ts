@@ -27,3 +27,57 @@ export function runClickDecision(resolution: TargetResolution, hooks: ClickRouti
 		hooks.runRuntimeFlow(resolution.runtime);
 	}
 }
+
+export interface ClickState {
+	/** The button has an `input:` line (`spec.input` is set). */
+	hasInput: boolean;
+	/** A terminal child process is alive — includes the `is-awaiting-input` state and a `completion: responseEnd` button that already looks idle. */
+	sessionAlive: boolean;
+	/** This block's own HTTP hand-off is in flight (`button.disabled`). */
+	handoffInFlight: boolean;
+}
+
+/**
+ * G1/G9: what a click on the button does. "open-field" only for an idle
+ * button with an `input:` line; every other click is "run-as-today" — the
+ * existing path, which reopens a live terminal or ignores a click during an
+ * in-flight hand-off, and which for a button without `input:` runs it.
+ */
+export function decideClickAction(state: ClickState): "open-field" | "run-as-today" {
+	if (!state.hasInput || state.sessionAlive || state.handoffInFlight) return "run-as-today";
+	return "open-field";
+}
+
+export interface InputSubmitHooks {
+	/** Shows one Notice. */
+	notify: (message: string) => void;
+	/** The terminal flow with the typed text to compose into the prompt. */
+	runTerminalFlow: (typedText: string) => void;
+	/** The runtime flow with the typed text to compose into the prompt. */
+	runRuntimeFlow: (runtime: AgentRuntime, typedText: string) => void;
+}
+
+/**
+ * G7: the submit-time counterpart of a click. The resolution passed in was
+ * made at submit, so its notices are shown here — once each — and the typed
+ * text is handed to whichever flow it picked. Rendering and composing
+ * happen inside the flows, so a render error shows the same message as
+ * today and spawns nothing.
+ *
+ * An unknown `target:` is the exception to a click's fallback: a click
+ * runs the default target (E1), but a submit would then send the typed
+ * text somewhere the author never named, so nothing runs. Today's notice
+ * says "running the default target instead", which would be untrue here,
+ * so it is replaced by one notice saying nothing was run.
+ */
+export function runInputSubmit(resolution: TargetResolution, typedText: string, hooks: InputSubmitHooks): void {
+	if (resolution.unknownTarget !== undefined) {
+		hooks.notify(`Unknown target "${resolution.unknownTarget}" — nothing was run. Check the button's target: line.`);
+		return;
+	}
+	resolution.notices.forEach((notice) => hooks.notify(notice));
+	runClickDecision(resolution, {
+		runTerminalFlow: () => hooks.runTerminalFlow(typedText),
+		runRuntimeFlow: (runtime) => hooks.runRuntimeFlow(runtime, typedText),
+	});
+}
