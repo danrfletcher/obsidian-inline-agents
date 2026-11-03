@@ -126,3 +126,77 @@ test("resolveModel: falls through to the literal value when no mapping matches",
 test("resolveModel: undefined input stays undefined", () => {
 	assert.equal(resolveModel(undefined, []), undefined);
 });
+
+test("input: sets the placeholder, key is case-insensitive", () => {
+	assert.equal(parseButtonBlock("input: Ticket to merge into").input, "Ticket to merge into");
+	assert.equal(parseButtonBlock("INPUT:   Ticket to merge into  ").input, "Ticket to merge into");
+	assert.equal(parseButtonBlock("Input: Ticket").input, "Ticket");
+});
+
+test("input: bare key uses the default placeholder", () => {
+	assert.equal(parseButtonBlock("input:").input, "Type here");
+	assert.equal(parseButtonBlock("input:   ").input, "Type here");
+});
+
+test("input: false, no, off and 0 in any case leave input undefined", () => {
+	for (const v of ["false", "FALSE", "no", "No", "off", "OFF", "0"]) {
+		assert.equal(parseButtonBlock(`input: ${v}`).input, undefined, `input: ${v} should be off`);
+	}
+});
+
+test("input: a colon inside the placeholder survives", () => {
+	assert.equal(parseButtonBlock("input: Merge into: which?").input, "Merge into: which?");
+});
+
+test("input: absent key leaves input undefined", () => {
+	assert.equal(parseButtonBlock("text: Run it\nprompt: hi").input, undefined);
+});
+
+test("input: does not change any other parsed key of a full block", () => {
+	const base = [
+		"text: Run it",
+		"prompt: Do {{ input }} on {{file.path}}",
+		"autoApprove: true",
+		"agent: OpenCode",
+		"model: m1",
+		"agentOutput: file",
+		"append: belowButton",
+		"showTerminal: false",
+		"completion: responseEnd",
+		"target: openclaw",
+		"open: true",
+		"agentId: main",
+	].join("\n");
+	const without = parseButtonBlock(base);
+	const withInput = parseButtonBlock(`${base}\ninput: Ticket`);
+	assert.deepEqual(without, {
+		text: "Run it",
+		prompt: "Do {{ input }} on {{file.path}}",
+		autoApprove: true,
+		agent: "opencode",
+		model: "m1",
+		agentOutput: "file",
+		append: "belowButton",
+		showTerminal: false,
+		completion: "responseEnd",
+		target: "openclaw",
+		open: true,
+		agentId: "main",
+		input: undefined,
+	});
+	assert.deepEqual(withInput, { ...without, input: "Ticket" });
+});
+
+test("input: adding the key to a minimal button changes only spec.input (what buttonBlock reads is unchanged)", () => {
+	// Mirrors the PR-1 container check: `text: Run check` / `prompt: Say hi`,
+	// then the same block with `input: Ticket to merge into` added. The label
+	// and prompt the button renders and runs from must be identical.
+	const before = parseButtonBlock("text: Run check\nprompt: Say hi");
+	const after = parseButtonBlock("text: Run check\nprompt: Say hi\ninput: Ticket to merge into");
+	assert.equal(before.text, "Run check");
+	assert.equal(before.prompt, "Say hi");
+	assert.equal(before.input, undefined);
+	assert.equal(after.text, before.text);
+	assert.equal(after.prompt, before.prompt);
+	assert.deepEqual(after, { ...before, input: "Ticket to merge into" });
+});
