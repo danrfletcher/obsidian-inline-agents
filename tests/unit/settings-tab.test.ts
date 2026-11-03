@@ -195,3 +195,168 @@ test("E9: a runtime saved before the field existed shows the toggle off and the 
 	assert.equal(plugin.saves, 0);
 	assert.equal(plugin.settings.runtimes[0].sendSessionIdHeader, undefined);
 });
+
+// --- PR-3: warning lines under the Thread-URL template (G2, G3) ---------------
+
+const TEMPLATE_LABEL = "Thread-URL template";
+const TOGGLE_OFF_LINE = "Hermes only uses this id when 'Send session id' is on.";
+const HOOK_LINE = "OpenClaw ignores {sessionId}.";
+const BOTH_LINE = 'The OpenClaw header sends a key containing ":" to Hermes. Both headers are still sent.';
+
+function templateRow(tab: Tab): FakeSetting {
+	const row = cardRows(tab).find((s) => s.name === TEMPLATE_LABEL);
+	assert.ok(row, "template row exists");
+	return row;
+}
+
+function sessionKeyToggle(tab: Tab): FakeToggle | undefined {
+	return cardRows(tab).find((s) => s.name === SESSION_KEY_LABEL)?.toggles[0];
+}
+
+/** Every warning line currently on the first runtime card, in screen order. */
+function warningLines(tab: Tab): string[] {
+	const nameRow = findSetting(tab.containerEl, (s) => s.name === "Name");
+	assert.ok(nameRow);
+	const lines: string[] = [];
+	const walk = (el: FakeEl): void => {
+		if (el.classes.has("agent-console-runtime-warning")) lines.push(el.text);
+		el.children.forEach(walk);
+	};
+	walk(nameRow.containerEl);
+	return lines;
+}
+
+async function newChatRuntimeTab(): Promise<{ plugin: ReturnType<typeof makePlugin>; tab: Tab }> {
+	const plugin = makePlugin(null);
+	const tab = openTab(plugin);
+	await addRuntime(tab);
+	await setKind(tab, "openai-chat");
+	return { plugin, tab };
+}
+
+test("G2: the template field's description lists {sessionId} next to the other placeholders", async () => {
+	const { tab } = await newChatRuntimeTab();
+	assert.match(templateRow(tab).desc, /\{agentId\}, \{sessionKey\}, \{sessionKeyPath\}, \{sessionId\}/);
+});
+
+test("G2: typing a {sessionId} template with the toggle off shows the line; turning the toggle on clears it, without reopening", async () => {
+	const { plugin, tab } = await newChatRuntimeTab();
+	assert.deepEqual(warningLines(tab), []);
+
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	assert.deepEqual(warningLines(tab), [TOGGLE_OFF_LINE]);
+	assert.equal(storedRuntime(plugin).threadUrlTemplate, "hermes://open/{sessionId}", "warning never blocks saving");
+
+	await sessionIdToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), []);
+
+	await sessionIdToggle(tab)?.click(false);
+	assert.deepEqual(warningLines(tab), [TOGGLE_OFF_LINE]);
+
+	await templateRow(tab).texts[0].type("hermes://open/{sessionKey}");
+	assert.deepEqual(warningLines(tab), []);
+});
+
+test("G2: a warned template is still written and saveSettings still runs", async () => {
+	const { plugin, tab } = await newChatRuntimeTab();
+	const savesBefore = plugin.saves;
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	assert.equal(plugin.saves, savesBefore + 1);
+	assert.equal(storedRuntime(plugin).threadUrlTemplate, "hermes://open/{sessionId}");
+	assert.equal(templateRow(tab).errorMessage, null);
+});
+
+test("G3/E12: both header toggles on show the line even with an empty template; either going off clears it", async () => {
+	const { tab } = await newChatRuntimeTab();
+	await sessionKeyToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), []);
+	await sessionIdToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), [BOTH_LINE]);
+
+	await sessionKeyToggle(tab)?.click(false);
+	assert.deepEqual(warningLines(tab), []);
+	await sessionKeyToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), [BOTH_LINE]);
+	await sessionIdToggle(tab)?.click(false);
+	assert.deepEqual(warningLines(tab), []);
+});
+
+test("G3: the both-on line sits beside a {sessionId} template without replacing it or being replaced by it", async () => {
+	const { tab } = await newChatRuntimeTab();
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	await sessionKeyToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), [TOGGLE_OFF_LINE]);
+	await sessionIdToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), [BOTH_LINE]);
+});
+
+test("added/G4: switching chat to hook with a {sessionId} template shows the OpenClaw line and hides the toggle row; a template without it shows none", async () => {
+	const { plugin, tab } = await newChatRuntimeTab();
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	await sessionIdToggle(tab)?.click(true);
+	assert.deepEqual(warningLines(tab), []);
+
+	await setKind(tab, "openclaw-hook");
+	assert.deepEqual(warningLines(tab), [HOOK_LINE]);
+	assert.equal(sessionIdToggle(tab), undefined);
+	assert.equal(storedRuntime(plugin).sendSessionIdHeader, true, "stored toggle kept");
+
+	await templateRow(tab).texts[0].type("https://example.com/{sessionKey}");
+	assert.deepEqual(warningLines(tab), []);
+
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	await setKind(tab, "openai-chat");
+	assert.deepEqual(warningLines(tab), [], "chat kind, toggle still on: no warning");
+});
+
+test("added: an invalid template shows its validation error and no warning, and is not saved", async () => {
+	const { plugin, tab } = await newChatRuntimeTab();
+	await templateRow(tab).texts[0].type("javascript:alert('{sessionId}')");
+	assert.match(templateRow(tab).errorMessage ?? "", /not allowed/);
+	assert.deepEqual(warningLines(tab), []);
+	assert.ok(!storedRuntime(plugin).threadUrlTemplate, "invalid template not stored");
+
+	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
+	assert.equal(templateRow(tab).errorMessage, null);
+	assert.deepEqual(warningLines(tab), [TOGGLE_OFF_LINE]);
+});
+
+test("added: a runtime saved before the toggle existed renders with no warnings", () => {
+	const legacy = {
+		...DEFAULT_SETTINGS,
+		runtimes: [
+			{
+				id: "r1",
+				name: "hermes",
+				kind: "openai-chat",
+				baseUrl: "http://127.0.0.1:8642/v1",
+				agentId: "",
+				tokenRequired: true,
+				sendSessionKeyHeader: false,
+				threadUrlTemplate: "https://example.com/threads/{sessionKey}",
+			},
+		],
+	};
+	const tab = openTab(makePlugin(legacy));
+	assert.deepEqual(warningLines(tab), []);
+});
+
+test("G2: opening Settings with a stored {sessionId} template and the toggle off already shows the line", () => {
+	const stored = {
+		...DEFAULT_SETTINGS,
+		runtimes: [
+			{
+				id: "r1",
+				name: "hermes",
+				kind: "openai-chat",
+				baseUrl: "http://127.0.0.1:8642/v1",
+				agentId: "",
+				tokenRequired: true,
+				sendSessionKeyHeader: false,
+				sendSessionIdHeader: false,
+				threadUrlTemplate: "hermes://open/{sessionId}",
+			},
+		],
+	};
+	assert.deepEqual(warningLines(openTab(makePlugin(stored))), [TOGGLE_OFF_LINE]);
+});

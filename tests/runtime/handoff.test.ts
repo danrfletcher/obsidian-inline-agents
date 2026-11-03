@@ -827,3 +827,127 @@ test("added: a click while a hand-off is in flight is still ignored (one request
 	assert.equal(rec.sendingCalls, 1);
 	assert.deepEqual(rec.openedUrls, [HERMES_URL]);
 });
+
+// --- 403 hint and the failure paths around it (G7, E1, E2, E3) -----------
+
+const HINT_403 = "Hermes needs API_SERVER_KEY set to use session ids.";
+
+test("G7/E2: chat, toggle on, 403 before the settle: the hint, terminal fallback, nothing opened, no thread URL, no id in the notice", async () => {
+	const rec = makeRecorder(async () => ({ kind: "response", status: 403 }), () => WEEKLY_MS);
+	await createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+	assert.deepEqual(rec.notices, [HINT_403]);
+	assert.equal(rec.fallbackCalls, 1);
+	assert.deepEqual(rec.openedUrls, []);
+	assert.deepEqual(rec.sentUrls, []);
+	assert.ok(!rec.notices[0].includes(WEEKLY_ID));
+});
+
+test("G7/E1: chat, toggle on, 401 before the settle: still 'token rejected', falls back, nothing opened or reported", async () => {
+	const rec = makeRecorder(async () => ({ kind: "response", status: 401 }), () => WEEKLY_MS);
+	await createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+	assert.deepEqual(rec.notices, ["token rejected"]);
+	assert.equal(rec.fallbackCalls, 1);
+	assert.deepEqual(rec.openedUrls, []);
+	assert.deepEqual(rec.sentUrls, []);
+});
+
+test("G7: chat, toggle off or field absent, 403 and 401: both 'token rejected'; the hint is for the toggle-on case only", async () => {
+	for (const sendSessionIdHeader of [false, undefined]) {
+		for (const status of [401, 403]) {
+			const rec = makeRecorder(async () => ({ kind: "response", status }), () => WEEKLY_MS);
+			await createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader })), rec.hooks);
+			assert.deepEqual(rec.notices, ["token rejected"], `toggle ${String(sendSessionIdHeader)} status ${status}`);
+			assert.equal(rec.fallbackCalls, 1);
+			assert.deepEqual(rec.openedUrls, []);
+			assert.deepEqual(rec.sentUrls, []);
+		}
+	}
+});
+
+test("G7/F5: hook kind 401 and 403 are 'token rejected' even with a stored session-id toggle on", async () => {
+	for (const status of [401, 403]) {
+		const rec = makeRecorder(async () => ({ kind: "response", status }), () => WEEKLY_MS);
+		await createHandoffRunner().runHandoff(weeklyInput(hookRuntime({ sendSessionIdHeader: true })), rec.hooks);
+		assert.deepEqual(rec.notices, ["token rejected"]);
+		assert.equal(rec.fallbackCalls, 1);
+	}
+});
+
+test("E2: a 403 after the 5 s settle keeps the late-failure wording, not the hint, and runs no fallback", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async () => pending.promise, () => WEEKLY_MS);
+	const runPromise = createHandoffRunner().runHandoff(weeklyInput(hermesRuntime({ sendSessionIdHeader: true })), rec.hooks);
+	t.mock.timers.tick(5000);
+	await runPromise;
+	assert.deepEqual(rec.openedUrls, [HERMES_URL]);
+
+	pending.resolve({ kind: "response", status: 403 });
+	await flushMicrotasks();
+
+	assert.deepEqual(rec.notices, ["hermes rejected the token after accepting the prompt — no fallback ran."]);
+	assert.ok(!rec.notices.some((n) => n.includes("API_SERVER_KEY")));
+	assert.equal(rec.fallbackCalls, 0);
+	assert.equal(rec.openedUrls.length, 1);
+	assert.equal(rec.sentUrls.length, 1);
+});
+
+test("E1: toggle on, token required but missing on this device: no request, terminal fallback, nothing opened", async () => {
+	const captured: HttpRequest[] = [];
+	const rec = makeRecorder(fakeHttpFn(OK_CHAT, captured), () => WEEKLY_MS);
+	await createHandoffRunner().runHandoff(
+		{ ...weeklyInput(hermesRuntime({ sendSessionIdHeader: true, tokenRequired: true })), token: undefined },
+		rec.hooks
+	);
+	assert.deepEqual(captured, []);
+	assert.equal(rec.fallbackCalls, 1);
+	assert.deepEqual(rec.openedUrls, []);
+	assert.deepEqual(rec.sentUrls, []);
+	assert.deepEqual(rec.notices, []);
+});
+
+test("E1/E2: {sessionId} template, toggle on: a 403 and a 401 both open nothing and report no URL", async () => {
+	for (const status of [403, 401]) {
+		const rec = makeRecorder(async () => ({ kind: "response", status }), () => WEEKLY_MS);
+		await createHandoffRunner().runHandoff(
+			weeklyInput(hermesRuntime({ sendSessionIdHeader: true, threadUrlTemplate: "hermes://open/{sessionId}" })),
+			rec.hooks
+		);
+		assert.deepEqual(rec.openedUrls, [], `status ${status}`);
+		assert.deepEqual(rec.sentUrls, [], `status ${status}`);
+		assert.equal(rec.fallbackCalls, 1);
+	}
+});
+
+test("E3: {sessionId} template with the toggle off still sends (no id header), settles and reports the URL", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const captured: HttpRequest[] = [];
+	const pending = deferred<HttpOutcome>();
+	const rec = makeRecorder(async (request) => {
+		captured.push(request);
+		return pending.promise;
+	}, () => WEEKLY_MS);
+	const runPromise = createHandoffRunner().runHandoff(
+		weeklyInput(hermesRuntime({ sendSessionIdHeader: false, threadUrlTemplate: "hermes://open/{sessionId}" })),
+		rec.hooks
+	);
+	t.mock.timers.tick(5000);
+	await runPromise;
+
+	assert.equal(captured.length, 1);
+	assert.equal(captured[0].headers["X-Hermes-Session-Id"], undefined);
+	assert.equal(JSON.parse(captured[0].body ?? "{}").user, WEEKLY_KEY);
+	assert.deepEqual(rec.sentUrls, [HERMES_URL]);
+	assert.equal(rec.fallbackCalls, 0);
+});
+
+test("E12: both toggles on: the request carries x-openclaw-session-key and X-Hermes-Session-Id", async () => {
+	const captured: HttpRequest[] = [];
+	const rec = makeRecorder(fakeHttpFn({ kind: "response", status: 500 }, captured), () => WEEKLY_MS);
+	await createHandoffRunner().runHandoff(
+		weeklyInput(hermesRuntime({ sendSessionKeyHeader: true, sendSessionIdHeader: true })),
+		rec.hooks
+	);
+	assert.equal(captured[0].headers["x-openclaw-session-key"], WEEKLY_KEY);
+	assert.equal(captured[0].headers["X-Hermes-Session-Id"], WEEKLY_ID);
+});

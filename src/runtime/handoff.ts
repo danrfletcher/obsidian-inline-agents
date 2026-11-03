@@ -55,8 +55,18 @@ function hookFailureNotice(name: string, result: HookFailureResult): string {
 	}
 }
 
-function chatFailureNotice(name: string, result: ChatFailureResult): string {
+/** Shown for a 403 before the settle when the runtime sends a session id: Hermes refuses that header unless API_SERVER_KEY is set. Never contains the id. */
+const SESSION_ID_FORBIDDEN_NOTICE = "Hermes needs API_SERVER_KEY set to use session ids.";
+
+/**
+ * Wording for a chat failure *before* the 5-second settle. A 403 gets the
+ * API_SERVER_KEY hint only when the runtime sends the session id header
+ * (`sendSessionIdHeader`); with it off, 403 reads "token rejected" like 401.
+ */
+function chatFailureNotice(name: string, result: ChatFailureResult, sendSessionIdHeader: boolean): string {
 	switch (result.kind) {
+		case "forbidden":
+			return sendSessionIdHeader ? SESSION_ID_FORBIDDEN_NOTICE : "token rejected";
 		case "unauthorized":
 			return "token rejected";
 		case "httpError":
@@ -73,11 +83,13 @@ function chatFailureNotice(name: string, result: ChatFailureResult): string {
  * ("running here", "token rejected") is wrong here because no fallback
  * happens and the terminal never runs; saying either would wrongly invite
  * a second click/run. This always says the run failed on the runtime
- * itself and that nothing here retried it.
+ * itself and that nothing here retried it. A late 403 keeps this wording
+ * too (never the session-id hint, which tells the user to fix the server
+ * and click again).
  */
 function lateChatFailureNotice(name: string, result: ChatFailureResult): string {
 	const detail =
-		result.kind === "unauthorized"
+		result.kind === "unauthorized" || result.kind === "forbidden"
 			? "rejected the token"
 			: result.kind === "httpError"
 				? `returned status ${result.status}`
@@ -237,7 +249,7 @@ export function createHandoffRunner(): {
 		}
 		// G12: an error inside the 5 seconds always falls back — a run that
 		// errors that early has not started.
-		hooks.notify(chatFailureNotice(input.runtime.name, race.value));
+		hooks.notify(chatFailureNotice(input.runtime.name, race.value, input.runtime.sendSessionIdHeader === true));
 		hooks.fallbackToTerminal();
 	}
 

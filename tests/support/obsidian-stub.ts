@@ -15,8 +15,8 @@ export class FakeEl {
 		this.children = [];
 		this.settings = [];
 	}
-	createDiv(_opts?: unknown): FakeEl {
-		return this.createEl("div");
+	createDiv(opts?: { text?: string; cls?: string }): FakeEl {
+		return this.createEl("div", opts);
 	}
 	createSpan(_opts?: unknown): FakeEl {
 		return this.createEl("span");
@@ -97,6 +97,7 @@ export class FakeDropdown {
 
 export class FakeText {
 	value = "";
+	onChangeCb: ((value: string) => unknown) | null = null;
 	setPlaceholder(_p: string): this {
 		return this;
 	}
@@ -104,8 +105,14 @@ export class FakeText {
 		this.value = value;
 		return this;
 	}
-	onChange(_cb: unknown): this {
+	onChange(cb: (value: string) => unknown): this {
+		this.onChangeCb = cb;
 		return this;
+	}
+	/** What typing does: the field takes the value, then fires onChange. */
+	async type(value: string): Promise<void> {
+		this.value = value;
+		await this.onChangeCb?.(value);
 	}
 }
 
@@ -140,7 +147,10 @@ export class FakeButton {
 export class FakeSetting {
 	name = "";
 	desc = "";
+	/** The last message passed to setErrorMessage; null when cleared. */
+	errorMessage: string | null = null;
 	toggles: FakeToggle[] = [];
+	texts: FakeText[] = [];
 	dropdowns: FakeDropdown[] = [];
 	buttons: FakeButton[] = [];
 	nameEl = new FakeEl();
@@ -160,7 +170,8 @@ export class FakeSetting {
 	setHeading(): this {
 		return this;
 	}
-	setErrorMessage(_m: string | null): this {
+	setErrorMessage(m: string | null): this {
+		this.errorMessage = m;
 		return this;
 	}
 	addToggle(cb: (t: FakeToggle) => unknown): this {
@@ -176,7 +187,9 @@ export class FakeSetting {
 		return this;
 	}
 	addText(cb: (t: FakeText) => unknown): this {
-		cb(new FakeText());
+		const t = new FakeText();
+		this.texts.push(t);
+		cb(t);
 		return this;
 	}
 	addButton(cb: (b: FakeButton) => unknown): this {

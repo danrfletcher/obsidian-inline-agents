@@ -65,6 +65,7 @@ export type ChatSendResult = { kind: "accepted" } | ChatFailureResult;
 
 export type ChatFailureResult =
 	| { kind: "unauthorized" }
+	| { kind: "forbidden" }
 	| { kind: "httpError"; status: number }
 	| { kind: "unreachable" };
 
@@ -73,7 +74,10 @@ export type ChatFailureResult =
  * body is never read (G15), so there's nothing here to parse. Whether this
  * counts as "settled" at all is the 5-second rule in handoff.ts, not this
  * function — this just says what *kind* of outcome it was, whenever it
- * actually arrives.
+ * actually arrives. 401 is `unauthorized` and 403 is `forbidden`: they are
+ * kept apart so handoff.ts can give a 403 its own wording when the runtime
+ * sends a session id (Hermes answers 403 to that header without an API
+ * key); without that toggle both are still worded as "token rejected".
  */
 export function classifyChatOutcome(outcome: HttpOutcome): ChatSendResult {
 	switch (outcome.kind) {
@@ -83,7 +87,8 @@ export function classifyChatOutcome(outcome: HttpOutcome): ChatSendResult {
 			return { kind: "unreachable" };
 		case "response": {
 			const { status } = outcome;
-			if (status === 401 || status === 403) return { kind: "unauthorized" };
+			if (status === 401) return { kind: "unauthorized" };
+			if (status === 403) return { kind: "forbidden" };
 			if (status < 200 || status >= 300) return { kind: "httpError", status };
 			return { kind: "accepted" };
 		}

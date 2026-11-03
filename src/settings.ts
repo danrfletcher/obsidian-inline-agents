@@ -5,6 +5,7 @@ import { checkBinaryAvailable, listOpenCodeModels, resolveBinary, CLAUDE_CANDIDA
 import { CLAUDE_MODEL_OPTIONS } from "./settingsModel";
 import type { AgentRuntime, RuntimeKind } from "./runtime/types";
 import { validateBaseUrl, validateRuntimeName, validateThreadUrlTemplate } from "./runtime/validation";
+import { runtimeWarnings } from "./runtime/settingsWarnings";
 import { testConnection } from "./runtime/testConnection";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
 import { removeRuntime } from "./runtime/removeRuntime";
@@ -214,6 +215,13 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 		return typeof value === "string" && value.trim() !== "";
 	}
 
+	/** Replaces whatever warning line `container` holds with `text`, or clears it when `text` is undefined. */
+	private showWarning(container: HTMLElement | undefined, text: string | undefined): void {
+		if (!container) return;
+		container.empty();
+		if (text) container.createDiv({ cls: "setting-item-description agent-console-runtime-warning", text });
+	}
+
 	private renderRuntimeRow(listEl: HTMLElement, index: number): void {
 		const runtime = this.plugin.settings.runtimes[index];
 		const card = listEl.createDiv({ cls: "agent-console-runtime-card" });
@@ -288,6 +296,25 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				})
 			);
 
+		// The warning lines depend on the template text as typed (even while it
+		// is invalid and so not stored), the two header toggles and the kind.
+		// Every one of those changes calls refreshWarnings(); a kind change
+		// re-renders the whole card, which computes them afresh. The two
+		// elements are filled in as the card is built below.
+		let typedTemplate = runtime.threadUrlTemplate ?? "";
+		let templateWarningEl: HTMLElement | undefined;
+		let headersWarningEl: HTMLElement | undefined;
+		const refreshWarnings = (): void => {
+			const warnings = runtimeWarnings({
+				kind: runtime.kind,
+				sendSessionKeyHeader: runtime.sendSessionKeyHeader,
+				sendSessionIdHeader: runtime.sendSessionIdHeader,
+				threadUrlTemplate: typedTemplate,
+			});
+			this.showWarning(templateWarningEl, warnings.template);
+			this.showWarning(headersWarningEl, warnings.bothHeaders);
+		};
+
 		if (runtime.kind === "openai-chat") {
 			new Setting(card)
 				.setName("Send session key as x-openclaw-session-key")
@@ -295,6 +322,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.addToggle((toggle) =>
 					toggle.setValue(runtime.sendSessionKeyHeader).onChange(async (value) => {
 						runtime.sendSessionKeyHeader = value;
+						refreshWarnings();
 						await this.plugin.saveSettings();
 					})
 				);
@@ -305,9 +333,11 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.addToggle((toggle) =>
 					toggle.setValue(runtime.sendSessionIdHeader === true).onChange(async (value) => {
 						runtime.sendSessionIdHeader = value;
+						refreshWarnings();
 						await this.plugin.saveSettings();
 					})
 				);
+			headersWarningEl = card.createDiv();
 		}
 
 		const hasToken = this.hasTokenOnThisDevice(runtime);
@@ -342,12 +372,17 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 
 		const threadUrlSetting = new Setting(card)
 			.setName("Thread-URL template")
-			.setDesc("Optional. May use {agentId}, {sessionKey}, {sessionKeyPath}.");
+			.setDesc("Optional. May use {agentId}, {sessionKey}, {sessionKeyPath}, {sessionId}.");
 		threadUrlSetting.addText((text) =>
 			text
 				.setPlaceholder("https://example.com/threads/{sessionKey}")
 				.setValue(runtime.threadUrlTemplate ?? "")
 				.onChange(async (value) => {
+					typedTemplate = value;
+					// An invalid template shows its error and no warning
+					// (runtimeWarnings returns none for it); a valid one is
+					// saved whatever the warning says — warnings never block.
+					refreshWarnings();
 					const result = validateThreadUrlTemplate(value);
 					if (!result.ok) {
 						threadUrlSetting.setErrorMessage(result.reason);
@@ -358,6 +393,8 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				})
 		);
+		templateWarningEl = card.createDiv();
+		refreshWarnings();
 
 		const testSetting = new Setting(card).setName("Test connection").setDesc("Checks reachability and the token — never sends a prompt.");
 		testSetting.addButton((btn) =>

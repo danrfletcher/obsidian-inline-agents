@@ -126,9 +126,18 @@ test("G15: the response body is never read by the chat classifier, even if prese
 	assert.deepEqual(classifyChatOutcome(outcome), { kind: "accepted" });
 });
 
-test("E3: 401/403 classify as unauthorized", () => {
+test("E3/G7: 401 classifies as unauthorized and 403 as its own forbidden result", () => {
 	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 401 }), { kind: "unauthorized" });
-	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 403 }), { kind: "unauthorized" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 403 }), { kind: "forbidden" });
+});
+
+test("G7: 2xx and 5xx classify as before, and 403 is the only status that became forbidden", () => {
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 200 }), { kind: "accepted" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 204 }), { kind: "accepted" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 500 }), { kind: "httpError", status: 500 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 503 }), { kind: "httpError", status: 503 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 402 }), { kind: "httpError", status: 402 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 404 }), { kind: "httpError", status: 404 });
 });
 
 test("E4: other non-2xx statuses classify by status only", () => {
