@@ -20,6 +20,7 @@ import { runClickDecision, decideClickAction, runInputSubmit } from "./runtime/c
 import type { AgentRuntime } from "./runtime/types";
 import { createSecretStoreAdapter } from "./runtime/secretStoreAdapter";
 import { createHandoffRunner, createSingleFlightHandoff, sendingLabel, sentLabel } from "./runtime/handoff";
+import { createFallbackToTerminal } from "./runtime/fallbackWiring";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
 import { openThreadUrl, threadLinkHref } from "./runtime/threadUrl";
 import { HOOK_TIMEOUT_MS } from "./runtime/hookRequest";
@@ -143,13 +144,21 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 		};
 
 		// The entire pre-PR-1.F1 click body — sessionAlive check, accordion,
-		// ensureTerm, spawn, all of it — unchanged apart from taking the
-		// optional `typedText` of a submitted `input:` field. Also reused
-		// directly as the runtime flow's fallback-to-terminal
-		// (G12/E2/E3/E4/E6/E12): every failure before a hand-off is accepted
-		// runs the button exactly as if `target:` had been `terminal` all
-		// along.
-		const runTerminalFlow = (typedText?: string) => {
+		// ensureTerm, spawn, all of it — unchanged apart from the two
+		// optional arguments below. Also reused directly as the runtime
+		// flow's fallback-to-terminal (G12/E2/E3/E4/E6/E12): every failure
+		// before a hand-off is accepted runs the button exactly as if
+		// `target:` had been `terminal` all along.
+		//
+		//  - `typedText`: set only when an `input:` field was submitted.
+		//    The prompt is then composed from the template and that text
+		//    (see inputPrompt.ts), and the text is also used on exit, with
+		//    the prompt, to keep it out of the `agentOutput: file` output
+		//    (E6). Both live only in this run's closure.
+		//  - `composedPrompt`: set only by the runtime fallback (G14). It is
+		//    the prompt the runtime was already given, and it is run as is,
+		//    with no second render.
+		const runTerminalFlow = (typedText?: string, composedPrompt?: string) => {
 			if (sessionAlive) {
 				setAccordionOpen(true);
 				return;
@@ -188,16 +197,21 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				setCompleteBtnVisible(false);
 				return;
 			}
-			const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
-			const rendered = renderPrompt(context, typedText);
-			if (rendered.error) {
-				term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
-				sessionAlive = false;
-				setVisualState("idle");
-				setCompleteBtnVisible(false);
-				return;
+			let prompt: string;
+			if (composedPrompt !== undefined) {
+				prompt = composedPrompt;
+			} else {
+				const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
+				const rendered = renderPrompt(context, typedText);
+				if (rendered.error) {
+					term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
+					sessionAlive = false;
+					setVisualState("idle");
+					setCompleteBtnVisible(false);
+					return;
+				}
+				prompt = rendered.text;
 			}
-			const prompt = rendered.text;
 			// The configured path is a preference, not a guarantee — this same
 			// data.json is shared between Dan's real Mac and the desktop-obsidian
 			// container, and a path valid in one is usually wrong in the other.
@@ -232,7 +246,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				term?.write(`\r\n\x1b[2m[agent-console] process exited (code ${code ?? "unknown"})\x1b[0m\r\n`);
 
 				if (agentOutput === "file" && term) {
-					const clean = extractCleanText(term);
+					const clean = extractCleanText(term, typedText, prompt);
 					if (clean) {
 						writeAgentOutputToFile(plugin.app, ctx.sourcePath, spec.text, clean, appendPosition, sectionInfo).catch(
 							(err) => {
@@ -320,12 +334,16 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 					// G12: every failure before the hand-off is accepted
 					// runs the button exactly as target: terminal would —
 					// see runTerminalFlow above.
-					fallbackToTerminal: () => {
-						button.disabled = false;
-						buttonLabel.setText(spec.text);
-						threadLink.setCssStyles({ display: "none" });
-						runTerminalFlow(typedText);
-					},
+					fallbackToTerminal: createFallbackToTerminal({
+						typedText,
+						composedPrompt: rendered.text,
+						restoreButton: () => {
+							button.disabled = false;
+							buttonLabel.setText(spec.text);
+							threadLink.setCssStyles({ display: "none" });
+						},
+						runTerminalFlow,
+					}),
 				}
 			);
 		};

@@ -161,3 +161,33 @@ test("typed text is passed to the flow as typed ($&, $1, template tokens, non-La
 	runInputSubmit(resolution, typed, hooks);
 	assert.deepEqual(events, [`terminal:${typed}`]);
 });
+
+// --- G12: `completion: responseEnd` after the reply -------------------------
+//
+// After the reply the button looks idle (setVisualState("idle") fires on
+// "idle-done") while the process is still running. The gate has no input for
+// the visual state at all: it keys on `sessionAlive`, so the same idle look
+// can mean "reopen the terminal" or "open the field", depending on that.
+
+test("G12: sessionAlive with an idle-looking button reopens the terminal, no field", () => {
+	const looksIdleSessionAlive = { hasInput: true, sessionAlive: true, handoffInFlight: false };
+	assert.equal(decideClickAction(looksIdleSessionAlive), "run-as-today");
+
+	// "run-as-today" for a terminal target is the terminal flow, whose own
+	// sessionAlive check opens the accordion rather than starting a run.
+	const resolution = resolveClickTarget({ target: "terminal", input: "Type here" }, { runtimes: [], defaultTarget: "terminal" }, noSecrets);
+	const { calls, runTerminalFlow } = recordingTerminalFlow();
+	const { calls: runtimeCalls, runRuntimeFlow } = recordingRuntimeFlow();
+	runClickDecision(resolution, { runTerminalFlow, runRuntimeFlow });
+	assert.deepEqual(calls, ["sessionAlive-check", "accordion-open", "ensureTerm"]);
+	assert.deepEqual(runtimeCalls, []);
+});
+
+test("G12/GP6: once the session has ended the same button opens the field", () => {
+	assert.equal(decideClickAction({ hasInput: true, sessionAlive: false, handoffInFlight: false }), "open-field");
+});
+
+test("G12: an in-flight hand-off still wins over everything: no field", () => {
+	assert.equal(decideClickAction({ hasInput: true, sessionAlive: false, handoffInFlight: true }), "run-as-today");
+	assert.equal(decideClickAction({ hasInput: true, sessionAlive: true, handoffInFlight: true }), "run-as-today");
+});
