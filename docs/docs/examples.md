@@ -119,16 +119,18 @@ Clicking it shows "Sending to openclaw…", then "Sent to openclaw ↗" — the 
 
 ## Hand a button off to a Hermes Agent (OpenAI-compatible chat)
 
-Requires a Hermes Agent API server at `http://127.0.0.1:8642/v1` and a runtime named `hermes` (kind **OpenAI-compatible chat**) configured in Settings — see [Agent Runtimes](agents/runtimes.md#openai-compatible-chat-hermes-agent-etc):
+Requires a Hermes Agent API server at `http://127.0.0.1:8642/v1` with `API_SERVER_KEY` set, and a runtime named `hermes` (kind **OpenAI-compatible chat**) configured in Settings with **Send session id as `X-Hermes-Session-Id`** on and **Thread-URL template** `hermes://open/{sessionId}` — see [Agent Runtimes](agents/runtimes.md#openai-compatible-chat-hermes-agent-etc):
 
 ````markdown
 ```agent-button
 text: Summarize today's notes
 prompt: Summarize today's journal entries into three bullet points.
 target: hermes
-open: false
+open: true
 ```
 ````
 
-`open: false` sends the prompt without opening anything — the button still shows "Sent to hermes" (Hermes has [no thread link yet](agents/runtimes.md#hermes-has-no-thread-link-yet)), and the run lasts only as long as Obsidian stays open.
+Clicking it shows "Sending to hermes…", then after about 5 seconds "Sent to hermes ↗", and the Hermes desktop app opens on that chat, where the reply lands when the run finishes. See [Opening the Hermes chat from the thread link](agents/runtimes.md#opening-the-hermes-chat-from-the-thread-link) for what the link depends on. The run lasts only as long as Obsidian stays open.
+
+`open: false` sends the prompt without opening the chat — the button still shows "Sent to hermes ↗", and clicking the ↗ opens it later, for as long as the note stays rendered. Without the session id toggle and the template the button shows plain "Sent to hermes", with no link.
 
