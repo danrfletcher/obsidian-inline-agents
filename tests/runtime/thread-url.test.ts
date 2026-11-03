@@ -86,3 +86,93 @@ test("R1: threadLinkHref is '#' (never the raw URL) for a disallowed scheme, in 
 		assert.equal(threadLinkHref(`${scheme}:something`), "#");
 	}
 });
+
+// --- G8: the {sessionId} placeholder ----------------------------------
+
+const WEEKLY_KEY = "inline:weekly-review:1793618103221";
+const WEEKLY_ID = "inline-weekly-review-1793618103221";
+const WEEKLY_VARS = { agentId: "main", sessionKey: WEEKLY_KEY, sessionId: WEEKLY_ID };
+
+test("G8: {sessionId} fill rule, every placeholder combination", () => {
+	const table: { name: string; template: string | undefined; expected: string | undefined }[] = [
+		{ name: "one", template: "hermes://open/{sessionId}", expected: `hermes://open/${WEEKLY_ID}` },
+		{ name: "many", template: "x://{sessionId}/{sessionId}?a={sessionId}", expected: `x://${WEEKLY_ID}/${WEEKLY_ID}?a=${WEEKLY_ID}` },
+		{
+			name: "with {sessionKey} and {sessionKeyPath}",
+			template: "x://{sessionId}|{sessionKey}|{sessionKeyPath}",
+			expected: `x://${WEEKLY_ID}|${WEEKLY_KEY}|inline/weekly-review/1793618103221`,
+		},
+		{
+			name: "all four, reversed order and repeated",
+			template: "x://{sessionKeyPath}|{sessionKey}|{sessionId}|{agentId}|{sessionKey}|{sessionKeyPath}|{sessionId}",
+			expected: `x://inline/weekly-review/1793618103221|${WEEKLY_KEY}|${WEEKLY_ID}|main|${WEEKLY_KEY}|inline/weekly-review/1793618103221|${WEEKLY_ID}`,
+		},
+		{ name: "none (old placeholders only)", template: "x://{agentId}/{sessionKeyPath}", expected: "x://main/inline/weekly-review/1793618103221" },
+		{ name: "no placeholder at all", template: "x://static", expected: "x://static" },
+		{ name: "surrounding whitespace is trimmed", template: "  hermes://open/{sessionId}  ", expected: `hermes://open/${WEEKLY_ID}` },
+		{ name: "undefined template", template: undefined, expected: undefined },
+		{ name: "empty template", template: "", expected: undefined },
+		{ name: "whitespace-only template", template: "  \t ", expected: undefined },
+	];
+	for (const row of table) {
+		assert.equal(buildThreadUrl(row.template, WEEKLY_VARS), row.expected, row.name);
+	}
+});
+
+test("G8: {sessionId} is inserted verbatim, never URL-encoded, while {sessionKey} keeps its ':'", () => {
+	const url = buildThreadUrl("x://{sessionId}?k={sessionKey}", WEEKLY_VARS);
+	assert.equal(url, `x://${WEEKLY_ID}?k=${WEEKLY_KEY}`);
+	assert.ok(!(url ?? "").includes("%"));
+	assert.ok(!WEEKLY_ID.includes(":"));
+	// Verbatim even for a value that encodeURIComponent would change.
+	assert.equal(buildThreadUrl("x://{sessionId}", { ...WEEKLY_VARS, sessionId: "a_b-c9" }), "x://a_b-c9");
+});
+
+test("G8: {sessionKey} does not eat {sessionKeyPath} nor {sessionId}, and vice versa", () => {
+	assert.equal(buildThreadUrl("{sessionKey}", WEEKLY_VARS), WEEKLY_KEY);
+	assert.equal(buildThreadUrl("{sessionKeyPath}", WEEKLY_VARS), "inline/weekly-review/1793618103221");
+	assert.equal(buildThreadUrl("{sessionId}", WEEKLY_VARS), WEEKLY_ID);
+	assert.equal(buildThreadUrl("{sessionIdX}{sessionKeyPat}", WEEKLY_VARS), "{sessionIdX}{sessionKeyPat}");
+});
+
+test("G8: templates without {sessionId} give the same output whether or not an id is passed (0.3.1 output unchanged)", () => {
+	const templates = [
+		"https://hermes.example/t/{agentId}/{sessionKey}",
+		"hermes://thread/{sessionKeyPath}",
+		"https://x/{sessionKeyPath}?raw={sessionKey}",
+		"https://x/{agentId}/{agentId}",
+	];
+	for (const template of templates) {
+		assert.equal(
+			buildThreadUrl(template, { agentId: "main", sessionKey: "inline:weekly:1000", sessionId: "inline-weekly-1000" }),
+			buildThreadUrl(template, { agentId: "main", sessionKey: "inline:weekly:1000" }),
+			template
+		);
+	}
+});
+
+test("GP1/GP5: openThreadUrl accepts hermes://open/<id> and hands that exact URL to the opener", () => {
+	const opened: string[] = [];
+	const url = `hermes://open/${WEEKLY_ID}`;
+	assert.deepEqual(openThreadUrl(url, (u) => opened.push(u)), { opened: true });
+	assert.deepEqual(opened, [url]);
+});
+
+test("GP1: the four disallowed schemes are still refused in any case, including with an id-shaped path", () => {
+	for (const scheme of ["file", "FILE", "javascript", "JavaScript", "data", "DATA", "vbscript", "VBScript"]) {
+		const opened: string[] = [];
+		const result = openThreadUrl(`${scheme}:${WEEKLY_ID}`, (u) => opened.push(u));
+		assert.equal(result.opened, false, scheme);
+		assert.ok(result.reason?.includes(scheme.toLowerCase()) || result.reason?.includes(scheme), scheme);
+		assert.ok(!(result.reason ?? "").includes(WEEKLY_ID), "reason never contains the id");
+		assert.deepEqual(opened, []);
+	}
+});
+
+test("GP5: threadLinkHref returns the hermes://open/<id> URL, and '#' for a disallowed scheme", () => {
+	const url = `hermes://open/${WEEKLY_ID}`;
+	assert.equal(threadLinkHref(url), url);
+	assert.equal(threadLinkHref(buildThreadUrl("hermes://open/{sessionId}", WEEKLY_VARS)), url);
+	assert.equal(threadLinkHref(buildThreadUrl("javascript:{sessionId}", WEEKLY_VARS)), "#");
+	assert.equal(threadLinkHref(buildThreadUrl("file:///{sessionId}", WEEKLY_VARS)), "#");
+});

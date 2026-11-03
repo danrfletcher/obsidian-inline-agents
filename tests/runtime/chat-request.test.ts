@@ -11,6 +11,8 @@ test("G15: builds POST <base>/chat/completions, bearer auth, one user message, s
 		message: "hello\n\nNote: /vault/note.md",
 		sessionKey: "inline:note:1000",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	assert.equal(request.url, "https://api.example.com/chat/completions");
 	assert.equal(request.method, "POST");
@@ -32,6 +34,8 @@ test("G15: x-openclaw-session-key is sent only when the runtime's own box for it
 		message: "msg",
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: true,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	assert.equal(withHeader.headers["x-openclaw-session-key"], "inline:note:1");
 
@@ -42,6 +46,8 @@ test("G15: x-openclaw-session-key is sent only when the runtime's own box for it
 		message: "msg",
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	assert.equal(withoutHeader.headers["x-openclaw-session-key"], undefined);
 });
@@ -54,6 +60,8 @@ test("no token configured: request has no Authorization header at all", () => {
 		message: "msg",
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	assert.equal(request.headers.Authorization, undefined);
 });
@@ -66,6 +74,8 @@ test("trailing slash on baseUrl does not produce a double slash", () => {
 		message: "msg",
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	assert.equal(request.url, "http://x/chat/completions");
 });
@@ -78,6 +88,8 @@ test("G15: no preface and no agentId/name fields in the chat body", () => {
 		message: "msg",
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	const body = JSON.parse(request.body ?? "{}");
 	assert.equal(Object.prototype.hasOwnProperty.call(body, "agentId"), false);
@@ -93,6 +105,8 @@ test("E9: a 200 KB message passes through the request body completely unchanged"
 		message: bigMessage,
 		sessionKey: "inline:note:1",
 		sendSessionKeyHeader: false,
+		sessionId: "inline-note-1",
+		sendSessionIdHeader: false,
 	});
 	const body = JSON.parse(request.body ?? "{}");
 	assert.equal(body.messages[0].content, bigMessage);
@@ -112,9 +126,18 @@ test("G15: the response body is never read by the chat classifier, even if prese
 	assert.deepEqual(classifyChatOutcome(outcome), { kind: "accepted" });
 });
 
-test("E3: 401/403 classify as unauthorized", () => {
+test("E3/G7: 401 classifies as unauthorized and 403 as its own forbidden result", () => {
 	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 401 }), { kind: "unauthorized" });
-	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 403 }), { kind: "unauthorized" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 403 }), { kind: "forbidden" });
+});
+
+test("G7: 2xx and 5xx classify as before, and 403 is the only status that became forbidden", () => {
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 200 }), { kind: "accepted" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 204 }), { kind: "accepted" });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 500 }), { kind: "httpError", status: 500 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 503 }), { kind: "httpError", status: 503 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 402 }), { kind: "httpError", status: 402 });
+	assert.deepEqual(classifyChatOutcome({ kind: "response", status: 404 }), { kind: "httpError", status: 404 });
 });
 
 test("E4: other non-2xx statuses classify by status only", () => {
@@ -126,4 +149,73 @@ test("G12: network failures (timeout, refused, error) classify as unreachable", 
 	assert.deepEqual(classifyChatOutcome({ kind: "timeout" }), { kind: "unreachable" });
 	assert.deepEqual(classifyChatOutcome({ kind: "refused" }), { kind: "unreachable" });
 	assert.deepEqual(classifyChatOutcome({ kind: "error", reason: "request failed" }), { kind: "unreachable" });
+});
+
+// --- Session id header (G5, E13, F7) ----------------------------------
+
+const SESSION_KEY = "inline:weekly-review:1793618103221";
+const SESSION_ID = "inline-weekly-review-1793618103221";
+
+function sessionRequest(overrides: Partial<Parameters<typeof buildChatRequest>[0]>) {
+	return buildChatRequest({
+		baseUrl: "http://127.0.0.1:8642/v1",
+		token: "tok-SECRET-123",
+		model: "hermes-agent",
+		message: "hello",
+		sessionKey: SESSION_KEY,
+		sendSessionKeyHeader: false,
+		sessionId: SESSION_ID,
+		sendSessionIdHeader: false,
+		...overrides,
+	});
+}
+
+test("G5/GP4: toggle on sends X-Hermes-Session-Id (exact casing) and body user = the session id, not the key", () => {
+	const request = sessionRequest({ sendSessionIdHeader: true });
+	assert.equal(request.url, "http://127.0.0.1:8642/v1/chat/completions");
+	assert.deepEqual(request.headers, {
+		"Content-Type": "application/json",
+		Authorization: "Bearer tok-SECRET-123",
+		"X-Hermes-Session-Id": SESSION_ID,
+	});
+	assert.ok(Object.keys(request.headers).includes("X-Hermes-Session-Id"));
+	assert.deepEqual(JSON.parse(request.body ?? "{}"), {
+		model: "hermes-agent",
+		messages: [{ role: "user", content: "hello" }],
+		user: SESSION_ID,
+		stream: false,
+	});
+	assert.ok(!(request.headers["X-Hermes-Session-Id"] ?? "").includes(":"));
+	assert.ok(!(request.body ?? "").includes(SESSION_KEY));
+});
+
+test("G5/F7: toggle off is byte for byte the previous request, with user = session key and no session-id header", () => {
+	const request = sessionRequest({ sendSessionIdHeader: false });
+	assert.deepEqual(request.headers, {
+		"Content-Type": "application/json",
+		Authorization: "Bearer tok-SECRET-123",
+	});
+	assert.equal(
+		request.body,
+		JSON.stringify({
+			model: "hermes-agent",
+			messages: [{ role: "user", content: "hello" }],
+			user: SESSION_KEY,
+			stream: false,
+		})
+	);
+});
+
+test("added: both toggles on sends the colon key in x-openclaw-session-key and the id in X-Hermes-Session-Id", () => {
+	const request = sessionRequest({ sendSessionKeyHeader: true, sendSessionIdHeader: true });
+	assert.equal(request.headers["x-openclaw-session-key"], SESSION_KEY);
+	assert.equal(request.headers["X-Hermes-Session-Id"], SESSION_ID);
+	assert.equal(JSON.parse(request.body ?? "{}").user, SESSION_ID);
+});
+
+test("added: session-key toggle on alone leaves the id header off and user = session key", () => {
+	const request = sessionRequest({ sendSessionKeyHeader: true });
+	assert.equal(request.headers["x-openclaw-session-key"], SESSION_KEY);
+	assert.equal(request.headers["X-Hermes-Session-Id"], undefined);
+	assert.equal(JSON.parse(request.body ?? "{}").user, SESSION_KEY);
 });

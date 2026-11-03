@@ -4,6 +4,13 @@ The full, authoritative changelog is the project's [GitHub Releases page](https:
 
 ## Highlights
 
+### 0.3.2
+
+- New per-runtime toggle **Send session id as `X-Hermes-Session-Id`** (OpenAI-compatible chat kind only, default off). When on, the plugin sends a colon-free session id in that header and as the request's `user` field.
+- New `{sessionId}` placeholder for the Thread-URL template, filled for both runtime kinds.
+- A Hermes runtime can now open its desktop chat: set the toggle on and the template to `hermes://open/{sessionId}`. Settings warns when a template uses `{sessionId}` without the toggle, and a 403 shows a hint about `API_SERVER_KEY`.
+- Docs fix: the note saying Hermes could not open its chat from a link is replaced with the working setup. The real-app checks (opening the chat, the display of a running turn, a link after Hermes compresses a chat) are still to be run.
+
 ### 0.3.1
 
 - Shorter plugin description in `manifest.json` (230 characters), to fit the community store's 250-character limit. No code changes.
