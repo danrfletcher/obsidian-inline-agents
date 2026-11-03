@@ -1,5 +1,6 @@
 import type { AgentKind } from "./agents";
 import type { ModelMapping } from "./settingsModel";
+import { parseInputKey } from "./inputPrompt";
 
 /**
  * Pure note-level parsing — no "obsidian" import, so it can be unit tested
@@ -45,6 +46,13 @@ export interface ButtonSpec {
 	open?: boolean;
 	/** Overrides a runtime's configured agent/model for this button only (G6). */
 	agentId?: string;
+	/**
+	 * `input: <placeholder>`. When set, the button asks for text before it
+	 * runs; this is the placeholder (bare `input:` gives "Type here").
+	 * Undefined means the line was omitted or switched off
+	 * (`false`/`no`/`off`/`0`).
+	 */
+	input?: string;
 }
 
 /**
@@ -159,6 +167,9 @@ export function parseButtonBlock(source: string): ButtonSpec {
 			case "agentid":
 				spec.agentId = value;
 				break;
+			case "input":
+				spec.input = parseInputKey(value);
+				break;
 		}
 	}
 	return {
@@ -174,6 +185,7 @@ export function parseButtonBlock(source: string): ButtonSpec {
 		target: spec.target,
 		open: spec.open,
 		agentId: spec.agentId,
+		input: spec.input,
 	};
 }
 

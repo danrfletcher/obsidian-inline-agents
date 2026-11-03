@@ -28,6 +28,20 @@ export function createSessionKey(basename: string, epochMs: number): string {
 	return `inline:${sanitiseBasename(basename)}:${epochMs}`;
 }
 
+/**
+ * The session id: the session key with every ":" replaced by "-", e.g.
+ * `inline:weekly-review:1793618103221` becomes
+ * `inline-weekly-review-1793618103221`. Only a-z, 0-9, "-" and "_" (the key
+ * is already limited to those apart from its two ":" separators and the
+ * digits of the epoch ms), never contains ":", and is far below 256
+ * characters (at most "inline" + 40 + the epoch ms + 2 separators). This is
+ * the one place the id is derived; callers hand the result on rather than
+ * re-deriving it.
+ */
+export function createSessionId(sessionKey: string): string {
+	return sessionKey.replace(/:/g, "-");
+}
+
 /** `{sessionKeyPath}`: the session key split on ":" into path segments. */
 export function splitSessionKeyPath(sessionKey: string): string[] {
 	return sessionKey.split(":");

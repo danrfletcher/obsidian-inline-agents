@@ -4,10 +4,17 @@ import { createHandoffRunner, sendingLabel, sentLabel } from "../../src/runtime/
 import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
 import { buildHookRequest } from "../../src/runtime/hookRequest";
 import { buildChatRequest } from "../../src/runtime/chatRequest";
+import { buildThreadUrl } from "../../src/runtime/threadUrl";
+import { createSessionId, createSessionKey } from "../../src/runtime/sessionKey";
 import type { AgentRuntime, HttpFn, HttpOutcome, HttpRequest } from "../../src/runtime/types";
 
 const SECRET = "tok-SECRET-123";
 const BEARER = `Bearer ${SECRET}`;
+
+// baseInput() uses the note basename "weekly" and makeSweepingHooks() pins
+// nowMs to 1000, so every hand-off in this file picks this key and id.
+const SESSION_KEY = createSessionKey("weekly", 1000);
+const SESSION_ID = createSessionId(SESSION_KEY);
 
 function hookRuntime(): AgentRuntime {
 	return {
@@ -33,8 +40,19 @@ function chatRuntime(): AgentRuntime {
 		tokenRequired: true,
 		tokenSecretName: "hermes-secret",
 		sendSessionKeyHeader: true,
-		threadUrlTemplate: "hermes://thread/{sessionKeyPath}",
+		sendSessionIdHeader: true,
+		threadUrlTemplate: "hermes://open/{sessionId}",
 	};
+}
+
+/** The same chat runtime with the session-id toggle off (the 0.3.1 request), template unchanged. chatRuntime() itself has both header toggles on (E12). */
+function chatRuntimeToggleOff(): AgentRuntime {
+	return { ...chatRuntime(), sendSessionIdHeader: false };
+}
+
+/** Only the session-id toggle on: the OpenClaw header is not sent. */
+function chatRuntimeIdOnly(): AgentRuntime {
+	return { ...chatRuntime(), sendSessionKeyHeader: false };
 }
 
 function baseInput(runtime: AgentRuntime): HandoffInput {
@@ -103,9 +121,33 @@ function assertNoLeak(strings: string[], context: string): void {
 	}
 }
 
-/** F5: the token must only ever appear in the Authorization header of a captured request. */
-function assertRequestsDontLeak(captured: HttpRequest[]): void {
+/**
+ * F5/E11/E12: the token must only ever appear in the Authorization header of
+ * a captured request; and, for a chat-kind `runtime`, the session-id header
+ * and the body `user` field carry the derived id (colon-free, never the
+ * token) exactly when the runtime's toggle is on, and are the 0.3.1 values
+ * (no header, `user` = session key) when it is off.
+ */
+function assertRequestsDontLeak(captured: HttpRequest[], runtime: AgentRuntime): void {
 	for (const request of captured) {
+		const idHeader = request.headers["X-Hermes-Session-Id"];
+		const body = request.body ? (JSON.parse(request.body) as Record<string, unknown>) : undefined;
+		if (runtime.kind === "openai-chat" && runtime.sendSessionIdHeader === true) {
+			assert.equal(idHeader, SESSION_ID);
+			assert.notEqual(idHeader, SECRET);
+			assert.ok(!idHeader.includes(":"), "session id header contains a colon");
+			assert.equal(body?.user, SESSION_ID);
+			if (runtime.sendSessionKeyHeader) {
+				assert.equal(request.headers["x-openclaw-session-key"], SESSION_KEY);
+				assert.notEqual(request.headers["x-openclaw-session-key"], SECRET);
+			} else {
+				assert.equal(request.headers["x-openclaw-session-key"], undefined);
+			}
+		} else {
+			assert.equal(idHeader, undefined, "no session id header unless the toggle is on for the chat kind");
+			if (runtime.kind === "openai-chat") assert.equal(body?.user, SESSION_KEY);
+		}
+
 		for (const [name, value] of Object.entries(request.headers)) {
 			if (name.toLowerCase() === "authorization") continue;
 			assert.ok(!value.includes(SECRET), `token leaked into header "${name}"`);
@@ -138,7 +180,7 @@ function earlyFixtures(): HttpOutcome[] {
 }
 
 test("F5: no notice, thread URL, opened URL, console call or button-facing string ever contains the token, across every early outcome, both runtime kinds", async () => {
-	for (const runtimeFactory of [hookRuntime, chatRuntime]) {
+	for (const runtimeFactory of [hookRuntime, chatRuntime, chatRuntimeToggleOff, chatRuntimeIdOnly]) {
 		for (const outcome of earlyFixtures()) {
 			const runtime = runtimeFactory();
 			const runner = createHandoffRunner();
@@ -169,7 +211,7 @@ test("F5: no notice, thread URL, opened URL, console call or button-facing strin
 
 			assertNoLeak(surface, "notice/label/URL surface");
 			assertNoLeak(consoleSurface, "console output");
-			assertRequestsDontLeak(captured);
+			assertRequestsDontLeak(captured, runtime);
 		}
 	}
 });
@@ -177,6 +219,7 @@ test("F5: no notice, thread URL, opened URL, console call or button-facing strin
 test("F5/R3: a late chat failure after the 5s settle never leaks the token, and uses the late-failure wording (not the pre-send fallback text)", async (t) => {
 	for (const lateOutcome of [
 		{ kind: "response", status: 401 },
+		{ kind: "response", status: 403 },
 		{ kind: "response", status: 500, body: `upstream said ${BEARER}` },
 		{ kind: "refused" },
 		{ kind: "error", reason: `request failed with ${BEARER}` },
@@ -208,7 +251,7 @@ test("F5/R3: a late chat failure after the 5s settle never leaks the token, and 
 
 			assertNoLeak(surface, "notice/label/URL surface (late chat failure)");
 			assertNoLeak(consoleSurface, "console output (late chat failure)");
-			assertRequestsDontLeak(captured);
+			assertRequestsDontLeak(captured, runtime);
 
 			// The pre-send fallback wording ("isn't reachable, running
 			// here", bare "token rejected") must never appear once
@@ -248,7 +291,7 @@ test("F5/R3: a late chat timeout after the 5s settle produces no notice and leak
 
 	assertNoLeak(surface, "notice/label/URL surface (late chat timeout)");
 	assertNoLeak(consoleSurface, "console output (late chat timeout)");
-	assertRequestsDontLeak(captured);
+	assertRequestsDontLeak(captured, runtime);
 	// R2: a late timeout is specifically never reported as a failure —
 	// only the "Sending to…"/"Sent to…" labels (and the thread URL) are
 	// in the surface, no extra notice.
@@ -277,10 +320,14 @@ test("F5: the token travels only in the Authorization header, never in the body 
 		message: "m",
 		sessionKey: "inline:n:1",
 		sendSessionKeyHeader: true,
+		sessionId: "inline-n-1",
+		sendSessionIdHeader: true,
 	});
 	assert.equal(chatRequest.headers.Authorization, BEARER);
 	assert.ok(!(chatRequest.body ?? "").includes(SECRET));
 	assert.notEqual(chatRequest.headers["x-openclaw-session-key"], SECRET);
+	assert.equal(chatRequest.headers["X-Hermes-Session-Id"], "inline-n-1");
+	assert.notEqual(chatRequest.headers["X-Hermes-Session-Id"], SECRET);
 });
 
 test("F5: an outcome whose body tries to smuggle the token back in never reaches a notice (hook kind reduces to status/ok/runId only)", async () => {
@@ -293,4 +340,55 @@ test("F5: an outcome whose body tries to smuggle the token back in never reaches
 	}));
 	await runner.runHandoff(baseInput(runtime), hooks);
 	assertNoLeak(surface, "hook-kind smuggled-token body");
+});
+
+test("E11/E12: toggle on, success: the opened URL and the reported URL are built from {sessionId} and carry neither the token nor the Bearer form", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const runtime = chatRuntime();
+	const captured: HttpRequest[] = [];
+	const surface: string[] = [];
+	const hooks = makeSweepingHooks(runtime, async (request) => {
+		captured.push(request);
+		return new Promise<HttpOutcome>(() => {}); // the reply never arrives: settle by the 5 s rule
+	}).hooks;
+	const opened: string[] = [];
+	hooks.openUrl = (url) => opened.push(url);
+	hooks.onSent = (threadUrl) => {
+		if (threadUrl) surface.push(threadUrl);
+	};
+
+	const runPromise = createHandoffRunner().runHandoff(baseInput(runtime), hooks);
+	t.mock.timers.tick(5000);
+	await runPromise;
+
+	const expected = `hermes://open/${SESSION_ID}`;
+	assert.deepEqual(opened, [expected]);
+	assert.deepEqual(surface, [expected]);
+	assertNoLeak([...opened, ...surface], "opened/reported thread URL");
+	assertRequestsDontLeak(captured, runtime);
+});
+
+test("E11: buildThreadUrl on hermes://open/{sessionId} yields the id and nothing else; a token-looking value is never an input", () => {
+	const url = buildThreadUrl("hermes://open/{sessionId}", { agentId: "gpt-4o", sessionKey: SESSION_KEY, sessionId: SESSION_ID });
+	assert.equal(url, `hermes://open/${SESSION_ID}`);
+	assertNoLeak([url ?? ""], "buildThreadUrl output");
+	assert.ok(!(url ?? "").slice("hermes://".length).includes(":"));
+});
+
+test("E11/G7: toggle on, 403 before the settle: the hint notice carries neither the token nor the session id, and the fallback runs", async () => {
+	const runtime = chatRuntime();
+	const fallbacks: number[] = [];
+	const captured: HttpRequest[] = [];
+	const { hooks, surface } = makeSweepingHooks(runtime, async (request) => {
+		captured.push(request);
+		return { kind: "response", status: 403 };
+	});
+	hooks.fallbackToTerminal = () => fallbacks.push(1);
+	await createHandoffRunner().runHandoff(baseInput(runtime), hooks);
+
+	assert.ok(surface.includes("Hermes needs API_SERVER_KEY set to use session ids."));
+	assert.equal(fallbacks.length, 1);
+	assertNoLeak(surface, "403 hint surface");
+	for (const s of surface) assert.ok(!s.includes(SESSION_ID), `session id leaked into: ${s}`);
+	assertRequestsDontLeak(captured, runtime);
 });

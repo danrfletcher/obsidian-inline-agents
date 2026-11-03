@@ -1,5 +1,5 @@
 import type { AgentRuntime, HttpFn } from "./types";
-import { createSessionKey } from "./sessionKey";
+import { createSessionId, createSessionKey } from "./sessionKey";
 import { buildThreadUrl, openThreadUrl } from "./threadUrl";
 import { buildHandoffMessage } from "./message";
 import { buildHookRequest, classifyHookOutcome } from "./hookRequest";
@@ -55,8 +55,18 @@ function hookFailureNotice(name: string, result: HookFailureResult): string {
 	}
 }
 
-function chatFailureNotice(name: string, result: ChatFailureResult): string {
+/** Shown for a 403 before the settle when the runtime sends a session id: Hermes refuses that header unless API_SERVER_KEY is set. Never contains the id. */
+const SESSION_ID_FORBIDDEN_NOTICE = "Hermes needs API_SERVER_KEY set to use session ids.";
+
+/**
+ * Wording for a chat failure *before* the 5-second settle. A 403 gets the
+ * API_SERVER_KEY hint only when the runtime sends the session id header
+ * (`sendSessionIdHeader`); with it off, 403 reads "token rejected" like 401.
+ */
+function chatFailureNotice(name: string, result: ChatFailureResult, sendSessionIdHeader: boolean): string {
 	switch (result.kind) {
+		case "forbidden":
+			return sendSessionIdHeader ? SESSION_ID_FORBIDDEN_NOTICE : "token rejected";
 		case "unauthorized":
 			return "token rejected";
 		case "httpError":
@@ -73,11 +83,13 @@ function chatFailureNotice(name: string, result: ChatFailureResult): string {
  * ("running here", "token rejected") is wrong here because no fallback
  * happens and the terminal never runs; saying either would wrongly invite
  * a second click/run. This always says the run failed on the runtime
- * itself and that nothing here retried it.
+ * itself and that nothing here retried it. A late 403 keeps this wording
+ * too (never the session-id hint, which tells the user to fix the server
+ * and click again).
  */
 function lateChatFailureNotice(name: string, result: ChatFailureResult): string {
 	const detail =
-		result.kind === "unauthorized"
+		result.kind === "unauthorized" || result.kind === "forbidden"
 			? "rejected the token"
 			: result.kind === "httpError"
 				? `returned status ${result.status}`
@@ -125,8 +137,14 @@ export function createHandoffRunner(): {
 } {
 	const warnedNoThreadUrl = new Set<string>();
 
-	function settle(input: HandoffInput, hooks: HandoffHooks, agentId: string, sessionKey: string): void {
-		const threadUrl = buildThreadUrl(input.runtime.threadUrlTemplate, { agentId, sessionKey });
+	function settle(
+		input: HandoffInput,
+		hooks: HandoffHooks,
+		agentId: string,
+		sessionKey: string,
+		sessionId: string
+	): void {
+		const threadUrl = buildThreadUrl(input.runtime.threadUrlTemplate, { agentId, sessionKey, sessionId });
 		if (threadUrl) {
 			if (input.openRequested) {
 				const openResult = openThreadUrl(threadUrl, hooks.openUrl);
@@ -145,6 +163,7 @@ export function createHandoffRunner(): {
 		hooks: HandoffHooks,
 		agentId: string,
 		sessionKey: string,
+		sessionId: string,
 		message: string
 	): Promise<void> {
 		const request = buildHookRequest({
@@ -162,7 +181,7 @@ export function createHandoffRunner(): {
 		const outcome = await hooks.httpFn(request);
 		const result = classifyHookOutcome(outcome);
 		if (result.kind === "ok") {
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			return;
 		}
 		// G12/E2/E3/E4/E12: every failure before the hook accepts the prompt
@@ -178,6 +197,7 @@ export function createHandoffRunner(): {
 		hooks: HandoffHooks,
 		agentId: string,
 		sessionKey: string,
+		sessionId: string,
 		message: string
 	): Promise<void> {
 		// E11: there is deliberately no cancel, retry or close handling for a
@@ -192,6 +212,8 @@ export function createHandoffRunner(): {
 			message,
 			sessionKey,
 			sendSessionKeyHeader: input.runtime.sendSessionKeyHeader,
+			sessionId,
+			sendSessionIdHeader: input.runtime.sendSessionIdHeader === true,
 		});
 
 		// Kept as two handles on the same underlying send: `rawOutcome` so
@@ -206,7 +228,7 @@ export function createHandoffRunner(): {
 
 		if (race.via === "timer") {
 			// G12: 5 seconds with no error is settled.
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			// G13/R2: an error arriving after that is a notice only — the
 			// terminal never runs and the prompt is never run twice. A
 			// late *timeout* specifically isn't reported at all: it only
@@ -222,12 +244,12 @@ export function createHandoffRunner(): {
 		}
 
 		if (race.value.kind === "accepted") {
-			settle(input, hooks, agentId, sessionKey);
+			settle(input, hooks, agentId, sessionKey, sessionId);
 			return;
 		}
 		// G12: an error inside the 5 seconds always falls back — a run that
 		// errors that early has not started.
-		hooks.notify(chatFailureNotice(input.runtime.name, race.value));
+		hooks.notify(chatFailureNotice(input.runtime.name, race.value, input.runtime.sendSessionIdHeader === true));
 		hooks.fallbackToTerminal();
 	}
 
@@ -253,15 +275,20 @@ export function createHandoffRunner(): {
 		hooks.onSending();
 
 		// G8: chosen once, before sending, so the same key appears in the
-		// request and (via settle() -> buildThreadUrl) the thread URL.
+		// request and (via settle() -> buildThreadUrl) the thread URL's
+		// `{sessionKey}` / `{sessionKeyPath}`.
 		const sessionKey = createSessionKey(input.noteBasename, hooks.nowMs());
+		// Derived here, once, from that same key. The chat request sends it
+		// when the runtime's toggle is on; the thread-URL builder fills
+		// `{sessionId}` with it for both kinds, toggle or no toggle.
+		const sessionId = createSessionId(sessionKey);
 		const agentId = input.agentIdOverride?.trim() || input.runtime.agentId;
 		const message = buildHandoffMessage(input.prompt, input.notePath, input.runtime.kind === "openclaw-hook");
 
 		if (input.runtime.kind === "openclaw-hook") {
-			await runHookHandoff(input, hooks, agentId, sessionKey, message);
+			await runHookHandoff(input, hooks, agentId, sessionKey, sessionId, message);
 		} else {
-			await runChatHandoff(input, hooks, agentId, sessionKey, message);
+			await runChatHandoff(input, hooks, agentId, sessionKey, sessionId, message);
 		}
 	}
 

@@ -89,11 +89,12 @@ Hermes Agent ships an OpenAI-compatible [API server](https://hermes-agent.nousre
     | Token required | on |
     | Token | the `API_SERVER_KEY` value |
     | Send session key as `x-openclaw-session-key` | off (that header is for OpenClaw) |
-    | Thread-URL template | leave blank (see [Hermes has no thread link yet](#hermes-has-no-thread-link-yet)) |
+    | Send session id as `X-Hermes-Session-Id` | on |
+    | Thread-URL template | `hermes://open/{sessionId}` (see [Opening the Hermes chat from the thread link](#opening-the-hermes-chat-from-the-thread-link)) |
 
 4. Click **Test connection**. It calls `GET /models`, so a wrong key shows up here rather than on the first click.
 
-5. A button with `target: hermes` now sends its prompt as a normal user turn (`POST <base>/chat/completions`, one `user`-role message). Nothing is prefixed onto it the way the OpenClaw hook kind's instruction line is. The turn runs on the Hermes profile whose gateway hosts the API server, with that profile's tools, memory and skills. Read the reply on the Hermes side.
+5. A button with `target: hermes` now sends its prompt as a normal user turn (`POST <base>/chat/completions`, one `user`-role message). Nothing is prefixed onto it the way the OpenClaw hook kind's instruction line is. The turn runs on the Hermes profile whose gateway hosts the API server, with that profile's tools, memory and skills. With the session id on and the template set, the button shows "Sent to hermes ↗" and opens that chat in the Hermes desktop app. Read the reply there.
 
 The same steps work for any other OpenAI-compatible server: point **Base URL** at its `/v1` root and set **Agent ID or model** to a model name it accepts.
 
@@ -111,6 +112,7 @@ Settings → Inline Agents → **Agent runtimes**:
 | **Agent ID or model** | text | The OpenClaw agent id, or the chat kind's `model`. A button's `agentId:` line overrides this for that one button. |
 | **Token required** | toggle, default on | When on, a click is blocked with a notice ("token not set on this device") if no token is stored on this device, and the thread never reaches the runtime. |
 | **Send session key as `x-openclaw-session-key`** | toggle, default off (chat kind only) | Turn on when the chat endpoint is itself OpenClaw's, so it can see the same session key as the hook kind does. |
+| **Send session id as `X-Hermes-Session-Id`** | toggle, default off (chat kind only) | Sends the plugin's [session id](#session-keys-and-thread-urls) in Hermes' `X-Hermes-Session-Id` header, and as the request body's `user` field in place of the session key, so Hermes files the chat under that id and `{sessionId}` in the template points at it. Needs `API_SERVER_KEY` set on Hermes — see [Opening the Hermes chat from the thread link](#opening-the-hermes-chat-from-the-thread-link). |
 | **Token** | masked secret field | Stored in Obsidian's own per-device secret storage, not `data.json` — see [Where the token lives](#where-the-token-lives) below. |
 | **Thread-URL template** | text, optional | Builds the link the "Sent to `<name>` ↗" button opens — see [Thread-URL templates](#thread-url-templates) below. |
 | **Test connection** | button | Checks reachability and the token, without sending a prompt — see [Test connection](#test-connection) below. |
@@ -161,6 +163,8 @@ Because of this, these button fields are **ignored** for a runtime target, with 
 
 Before sending, the plugin picks a **session key**: `inline:<note basename, URL-safe>:<epoch ms>` — the note's basename lowercased, anything outside `a-z 0-9 - _` replaced with `-`, capped at 40 characters, then the timestamp. This is why `allowedSessionKeyPrefixes: ["inline:"]` is what OpenClaw needs to allow.
 
+From the same key it derives a **session id**: the key with each `:` replaced by `-`, so `inline:weekly-review:1793618103221` gives `inline-weekly-review-1793618103221`. The id uses only `a-z 0-9 - _` and never contains `:`, which is what Hermes' in-app links require. The key and the id are worked out once per click, before the request goes out, and the request and the thread URL use the same values.
+
 ### Thread-URL templates
 
 An optional per-runtime template that builds the link the "Sent to `<name>` ↗" button opens, using:
@@ -170,6 +174,7 @@ An optional per-runtime template that builds the link the "Sent to `<name>` ↗"
 | `{agentId}` | The agent ID/model actually used for this click (the button's `agentId:` override, or the runtime's configured one). |
 | `{sessionKey}` | The full session key, e.g. `inline:weekly-review:1760000000000`. |
 | `{sessionKeyPath}` | The session key split on `:` into path segments and rejoined with `/` — `inline/weekly-review/1760000000000`. |
+| `{sessionId}` | The session key with each `:` replaced by `-`, e.g. `inline-weekly-review-1793618103221`. Filled for both runtime kinds, and not URL-encoded (it only holds safe characters). Only the OpenAI-compatible chat kind with **Send session id** on actually sends it to the runtime; the OpenClaw hook kind ignores `{sessionId}`. |
 
 The template can use `http`, `https`, or any custom URL scheme a runtime's own app registers — the plugin doesn't know any particular runtime's scheme, so anything is accepted except four schemes that are never safe to open automatically: **`file`**, **`javascript`**, **`data`**, **`vbscript`**. A template using one of those is rejected at settings-save time, and checked again defensively right before a thread would open.
 
@@ -177,14 +182,30 @@ With no thread-URL template at all, there's nothing to open — the click is fir
 
 Opening a thread uses the operating system's own URL handler, the same way a link in any other app would — an `http(s)` URL opens in your default browser; a custom scheme opens whatever app registered it.
 
-### Hermes has no thread link yet
+### Opening the Hermes chat from the thread link
 
-Leave the Thread-URL template blank for a Hermes runtime. The Hermes desktop app can open a chat by link, but none of the placeholders above give it the right chat:
+The Hermes desktop app opens a chat from a `hermes://open/<id>` link. Hermes never reports its own chat id back, so the plugin chooses the id itself and tells Hermes to use it:
 
-- Hermes picks its own id for the chat a button starts, and the plugin doesn't learn it. `{sessionKey}` is the plugin's own key, and the chat kind only sends it as `x-openclaw-session-key`, which Hermes ignores.
-- The plugin's session keys contain `:`, which Hermes' in-app links reject.
+1. In the `hermes` runtime, turn on **Send session id as `X-Hermes-Session-Id`**.
+2. Set **Thread-URL template** to `hermes://open/{sessionId}`.
 
-Until that changes, a Hermes button shows "Sent to hermes" with no link, and you find the chat in Hermes yourself.
+With both set, a click sends the [session id](#session-keys-and-thread-urls) in an `X-Hermes-Session-Id` header and as the request body's `user` field (instead of the session key), and the thread link is `hermes://open/<that id>`. For `Weekly Review.md` clicked at epoch ms `1793618103221` that is `hermes://open/inline-weekly-review-1793618103221`. Hermes stores the chat under the id it was given, lists it under the **API** section of the desktop sidebar, and the reply lands in the same chat when the run finishes. The header carries the session id, not the token; the token is only ever sent in the `Authorization` header.
+
+The plugin knows one Hermes header name and no URL scheme: the template stays yours to write. `hermes://open/sessions/{sessionId}` also works, through Hermes' legacy redirect to the same chat, but the short form above is the documented one.
+
+What to know:
+
+- **`API_SERVER_KEY` is required for the header.** Hermes only accepts `X-Hermes-Session-Id` when its API server has a key (`API_SERVER_KEY`, set in step 1 of the example above). A Hermes with no key answers 403, and the button shows `Hermes needs API_SERVER_KEY set to use session ids.` and opens nothing. Like any failure before the 5-second settle, it falls back to the terminal. A 401 keeps the usual `token rejected` wording.
+- **Which profile.** The link opens on the profile that hosts the API server: the default profile, on port 8642. If the desktop app is showing a different profile, the link may open an empty or missing chat.
+- **A template using `{sessionId}` with the toggle off** points at a chat that does not exist, because Hermes never receives the id. Settings shows a warning under the template field (`Hermes only uses this id when 'Send session id' is on.`); the click itself still works. With the hook kind the warning reads `OpenClaw ignores {sessionId}.`, and with both the OpenClaw-header and session-id toggles on it says the OpenClaw header sends a key containing `:` to Hermes. Both headers are still sent.
+- **When it opens.** As for every runtime, the link opens at the 5-second settle, while the turn is usually still running, not when the reply arrives. The chat holds your prompt, and the reply shows up in it when the run finishes.
+- **The ↗ lasts only while the note stays rendered.** The link is kept in the button, never written to the note. Re-rendering the note or restarting Obsidian drops it. The chat itself stays in Hermes' **API** sidebar section, so you can still open it there.
+- **Same-millisecond collision.** The id is the note's basename plus the epoch millisecond of the click. Two clicks from notes with the same basename in the same millisecond share an id, so the second turn shares or collides with the first one's server-side session. No guard exists against this.
+- **Long chats.** When Hermes compresses a long chat, the link is expected to follow the chat to its newest part. That is read from Hermes' source, not tested.
+- **No desktop app.** If the Hermes desktop app isn't installed, or nothing handles `hermes://`, the link does whatever your operating system does with an unhandled URL scheme; the plugin adds nothing to that.
+- **Existing runtimes are not edited for you.** A `hermes` runtime you set up earlier keeps working exactly as before, with no header and a blank template, until you turn the toggle on and set the template by hand.
+
+The only thing Hermes needs for this is the `API_SERVER_KEY` it already uses to run the API server.
 
 ## Test connection
 
@@ -205,6 +226,7 @@ If anything stops the prompt from reaching the runtime, the plugin shows a notic
 | `target:` names a runtime that doesn't exist | `Unknown target "<name>" — running the default target instead.` | Check the spelling against **Agent runtimes** in Settings, or fix the button. |
 | The runtime is unreachable (connection refused, DNS failure, or no response) | `<name> isn't reachable, running here` | Make sure the runtime's HTTP server is actually running and reachable at its configured base URL. The hook kind falls back if no response arrives within 15 seconds. The chat kind only falls back on a connection error that arrives **within** the first 5 seconds (see the 5-second rule below) — a chat run that is merely slow to respond is treated as sent, not unreachable. |
 | The token was rejected (401/403) | `token rejected` | Re-enter the correct token for this runtime in Settings, on this device. |
+| The chat kind sends a session id and Hermes answers 403 | `Hermes needs API_SERVER_KEY set to use session ids.` | Set `API_SERVER_KEY` on the Hermes side, which is what lets it accept `X-Hermes-Session-Id`, then click again. |
 | No token stored on this device for a runtime marked "token required" | `Token not set on this device for "<name>".` | Enter the token in Settings on this device — settings synced from another device carry the runtime's configuration but never its token. |
 | OpenClaw rejects the session key (its policy isn't enabled) | `OpenClaw rejected the session key: enable allowRequestSessionKey and allow the inline: prefix` | On the OpenClaw side, turn on `allowRequestSessionKey` and add `"inline:"` to `allowedSessionKeyPrefixes`. |
 
@@ -222,7 +244,7 @@ The OpenClaw hook kind doesn't need this: it has a real "accepted" signal (`{ ok
 
 - It never starts, installs, restarts, or configures a runtime — you turn on the runtime's own HTTP endpoint yourself, outside of Obsidian. The plugin only ever talks to a runtime you've explicitly configured, and only on a button click or "Test connection" — never on its own.
 - It makes no network request to anything you haven't configured in **Agent runtimes**.
-- No OAuth, no login flow, no custom header beyond a bearer token.
+- No OAuth, no login flow, no custom header beyond a bearer token and the two optional session headers (`x-openclaw-session-key` and `X-Hermes-Session-Id`), both off by default.
 
 ## Next
 

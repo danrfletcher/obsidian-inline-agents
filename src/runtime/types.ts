@@ -32,7 +32,15 @@ export interface AgentRuntime {
 	tokenSecretName?: string;
 	/** Chat kind only: also send the session key as `x-openclaw-session-key`. Default false. */
 	sendSessionKeyHeader: boolean;
-	/** Optional URL used to open the thread; may use {agentId}, {sessionKey}, {sessionKeyPath}. */
+	/**
+	 * Chat kind only: also send the colon-free session id as
+	 * `X-Hermes-Session-Id` and use it as the body `user` field instead of
+	 * the session key. Optional: absent (older data.json) means off. The
+	 * stored value is kept when the kind is switched to the hook kind,
+	 * which ignores it.
+	 */
+	sendSessionIdHeader?: boolean;
+	/** Optional URL used to open the thread; may use {agentId}, {sessionKey}, {sessionKeyPath}, {sessionId}. */
 	threadUrlTemplate?: string;
 }
 

@@ -117,3 +117,67 @@ test("validateThreadUrlTemplate: URL scheme allow-list", () => {
 	assert.equal(validateThreadUrlTemplate("data:text/html,x").ok, false);
 	assert.equal(validateThreadUrlTemplate("vbscript:msgbox(1)").ok, false);
 });
+
+// --- sendSessionIdHeader (E9, E13, G4) --------------------------------
+
+function hermesRuntime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+	return {
+		id: "hermes",
+		name: "hermes",
+		kind: "openai-chat",
+		baseUrl: "http://127.0.0.1:8642/v1",
+		agentId: "hermes-agent",
+		tokenRequired: true,
+		sendSessionKeyHeader: false,
+		...overrides,
+	};
+}
+
+test("E9: a runtime saved without sendSessionIdHeader migrates unchanged: the field stays undefined (falsy), other fields untouched", () => {
+	const saved = hermesRuntime({ threadUrlTemplate: "hermes://open/x", tokenSecretName: "hermes-secret" });
+	const result = migrateSettings({ runtimes: [saved], defaultTarget: "hermes" });
+	assert.equal(result.runtimes.length, 1);
+	assert.equal(result.runtimes[0].sendSessionIdHeader, undefined);
+	assert.ok(!result.runtimes[0].sendSessionIdHeader);
+	assert.equal(Object.prototype.hasOwnProperty.call(result.runtimes[0], "sendSessionIdHeader"), false);
+	assert.deepEqual(result.runtimes[0], saved);
+});
+
+test("a stored sendSessionIdHeader: true survives migration, and false stays false", () => {
+	const on = hermesRuntime({ sendSessionIdHeader: true });
+	const off = hermesRuntime({ id: "other", name: "other", sendSessionIdHeader: false });
+	const result = migrateSettings({ runtimes: [on, off] });
+	assert.equal(result.runtimes[0].sendSessionIdHeader, true);
+	assert.equal(result.runtimes[1].sendSessionIdHeader, false);
+});
+
+test("E13/G4: a runtime whose kind is switched to the hook kind keeps the stored value through save and reload; switching back shows it unchanged", () => {
+	const runtime = hermesRuntime({ sendSessionIdHeader: true });
+	// What the Kind dropdown's onChange does, then a save/load round trip.
+	runtime.kind = "openclaw-hook";
+	const asHook = migrateSettings(JSON.parse(JSON.stringify({ runtimes: [runtime] })));
+	assert.equal(asHook.runtimes[0].kind, "openclaw-hook");
+	assert.equal(asHook.runtimes[0].sendSessionIdHeader, true);
+	asHook.runtimes[0].kind = "openai-chat";
+	const backToChat = migrateSettings(JSON.parse(JSON.stringify(asHook)));
+	assert.equal(backToChat.runtimes[0].kind, "openai-chat");
+	assert.equal(backToChat.runtimes[0].sendSessionIdHeader, true);
+});
+
+// --- GP1: the Hermes thread-URL template ------------------------------
+
+test("GP1: hermes://open/{sessionId} validates, other custom schemes pass, the four disallowed ones are still refused", () => {
+	assert.equal(validateThreadUrlTemplate("hermes://open/{sessionId}").ok, true);
+	assert.equal(validateThreadUrlTemplate("hermes://open/sessions/{sessionId}").ok, true);
+	assert.equal(validateThreadUrlTemplate("file:///{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("javascript:{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("data:{sessionId}").ok, false);
+	assert.equal(validateThreadUrlTemplate("vbscript:{sessionId}").ok, false);
+});
+
+test("GP1: the template survives a settings save and reload unchanged", () => {
+	const saved = hermesRuntime({ threadUrlTemplate: "hermes://open/{sessionId}", sendSessionIdHeader: true });
+	const reloaded = migrateSettings(JSON.parse(JSON.stringify({ runtimes: [saved] })));
+	assert.equal(reloaded.runtimes[0].threadUrlTemplate, "hermes://open/{sessionId}");
+	assert.deepEqual(reloaded.runtimes[0], saved);
+});

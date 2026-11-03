@@ -4,12 +4,22 @@ import { splitSessionKeyPath } from "./sessionKey";
 export interface ThreadUrlVars {
 	agentId: string;
 	sessionKey: string;
+	/**
+	 * The colon-free session id derived once next to the session key
+	 * (`createSessionId`). Only read here, never re-derived. When omitted,
+	 * a `{sessionId}` in the template is left untouched.
+	 */
+	sessionId?: string;
 }
 
 /**
- * G9: fills `{agentId}`, `{sessionKey}` and `{sessionKeyPath}` (the session
+ * G8/G9: fills `{agentId}`, `{sessionKey}`, `{sessionKeyPath}` (the session
  * key split on ":" into path segments, rejoined with "/" — the natural
- * separator for a URL path) into a runtime's thread-URL template. Returns
+ * separator for a URL path) and `{sessionId}` (the colon-free session id,
+ * inserted verbatim: it only holds a-z 0-9 - _, so it is never URL-encoded,
+ * and it is filled for both runtime kinds whether or not the runtime's
+ * "send session id" toggle is on) into a runtime's thread-URL template.
+ * Returns
  * undefined when there's no template to fill at all (E5: fire-and-forget,
  * nothing to open).
  */
@@ -17,10 +27,12 @@ export function buildThreadUrl(template: string | undefined, vars: ThreadUrlVars
 	const trimmed = (template ?? "").trim();
 	if (!trimmed) return undefined;
 	const sessionKeyPath = splitSessionKeyPath(vars.sessionKey).join("/");
+	const { sessionId } = vars;
 	return trimmed
 		.replace(/\{agentId\}/g, vars.agentId)
 		.replace(/\{sessionKeyPath\}/g, sessionKeyPath)
-		.replace(/\{sessionKey\}/g, vars.sessionKey);
+		.replace(/\{sessionKey\}/g, vars.sessionKey)
+		.replace(/\{sessionId\}/g, (match) => sessionId ?? match);
 }
 
 export interface OpenResult {

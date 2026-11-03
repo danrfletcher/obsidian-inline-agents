@@ -15,9 +15,15 @@ export interface ClickSettingsFields {
 	defaultTarget: string;
 }
 
+/**
+ * `unknownTarget` is set (to the trimmed name as written) only when the
+ * button's `target:` named nothing that exists. A click then runs the
+ * fallback default target with `notices` explaining it (E1); an `input:`
+ * submit runs nothing instead (see runInputSubmit).
+ */
 export type TargetResolution =
-	| { kind: "terminal"; notices: string[] }
-	| { kind: "runtime"; runtime: AgentRuntime; notices: string[] };
+	| { kind: "terminal"; notices: string[]; unknownTarget?: string }
+	| { kind: "runtime"; runtime: AgentRuntime; notices: string[]; unknownTarget?: string };
 
 function findRuntimeByName(runtimes: AgentRuntime[], name: string): AgentRuntime | undefined {
 	const needle = name.trim().toLowerCase();
@@ -54,9 +60,12 @@ export function resolveTargetName(
 	const match = findRuntimeByName(runtimes, requested);
 	if (match) return { kind: "runtime", runtime: match, notices: [] };
 
-	return resolveByConfiguredName(defaultTarget, runtimes, [
-		`Unknown target "${requested}" — running the default target instead.`,
-	]);
+	return {
+		...resolveByConfiguredName(defaultTarget, runtimes, [
+			`Unknown target "${requested}" — running the default target instead.`,
+		]),
+		unknownTarget: requested,
+	};
 }
 
 const IGNORED_FIELD_NAMES: ReadonlyArray<keyof ClickSpecFields> = [
@@ -96,5 +105,7 @@ export function resolveClickTarget(
 	if (base.runtime.tokenRequired && !secretStore.hasToken(base.runtime.tokenSecretName)) {
 		notices.push(`Token not set on this device for "${base.runtime.name}".`);
 	}
-	return { kind: "runtime", runtime: base.runtime, notices };
+	const resolved: TargetResolution = { kind: "runtime", runtime: base.runtime, notices };
+	if (base.unknownTarget !== undefined) resolved.unknownTarget = base.unknownTarget;
+	return resolved;
 }
