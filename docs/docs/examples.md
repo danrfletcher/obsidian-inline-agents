@@ -134,3 +134,16 @@ Clicking it shows "Sending to hermes…", then after about 5 seconds "Sent to he
 
 `open: false` sends the prompt without opening the chat — the button still shows "Sent to hermes ↗", and clicking the ↗ opens it later, for as long as the note stays rendered. Without the session id toggle and the template the button shows plain "Sent to hermes", with no link.
 
+## Ask for text when the button is clicked
+
+A button that asks for a topic before it runs:
+
+````markdown
+```agent-button
+text: Summarize a topic
+prompt: Summarize what this note says about {{ input }} in three bullet points.
+input: Which topic?
+```
+````
+
+Clicking it swaps the button for a text field showing "Which topic?", with Submit and Cancel. Type `Obsidian Atlas dark mode` and press Enter, and the terminal opens with the prompt `Summarize what this note says about Obsidian Atlas dark mode in three bullet points.` Esc or Cancel brings the button back and runs nothing. See [`input`](reference/fields.md#input) for the full rules.

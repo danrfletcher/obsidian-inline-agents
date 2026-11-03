@@ -48,7 +48,7 @@ An earlier attempt used BSD `script -q /dev/null`, which is broken *specifically
 - **`agentOutput: file` and `completion: responseEnd` are both heuristic**, pattern-matching the rendered terminal against text Claude Code has been observed to print — a CLI update or unusual output can occasionally misclassify a run. See [Completion Modes](reference/completion-modes.md) and [Captured File Output](reference/file-output.md).
 - **Closing the note kills a `manual`-mode run.** Each button's process is tied to its block's lifetime — navigating away sends the child process `SIGINT`. A `responseEnd` run does outlive the button going idle, but not the note being closed.
 - **No live terminal resize signal to the child** — a long run in a pane you resize mid-flight may wrap oddly, but content still comes through correctly.
-- **One button = one fixed workflow.** There's no dropdown/picker for choosing a prompt at click time; each block is one hardcoded (templated) prompt.
+- **One button = one fixed workflow.** Each block has one templated prompt, and you can't choose between prompts at click time. The one click-time input is the single text field from an `input:` line, which fills in the prompt (see [`input`](reference/fields.md#input)).
 
 ## Still stuck?
 
