@@ -440,3 +440,104 @@ test("G13: a late success after settling at 5s produces no extra notice", async 
 	assert.equal(rec.notices.length, 0);
 	assert.equal(rec.sentUrls.length, 1);
 });
+
+// --- Session id header (G5, G6, GP3, GP4, E13) -------------------------
+
+const WEEKLY_MS = 1793618103221;
+const WEEKLY_KEY = "inline:weekly-review:1793618103221";
+const WEEKLY_ID = "inline-weekly-review-1793618103221";
+
+function weeklyInput(runtime: AgentRuntime): HandoffInput {
+	return baseInput(runtime, { noteBasename: "Weekly Review", notePath: "/vault/Weekly Review.md" });
+}
+
+const OK_CHAT: HttpOutcome = { kind: "response", status: 200 };
+const OK_HOOK: HttpOutcome = { kind: "response", status: 200, body: JSON.stringify({ ok: true, runId: "r1" }) };
+
+test("GP4/G5: chat runtime, toggle on: one POST carrying X-Hermes-Session-Id and body user = the id derived from the key", async () => {
+	const captured: HttpRequest[] = [];
+	const runner = createHandoffRunner();
+	const rec = makeRecorder(fakeHttpFn(OK_CHAT, captured), () => WEEKLY_MS);
+	const runtime = chatRuntime({
+		baseUrl: "http://127.0.0.1:8642/v1",
+		tokenRequired: true,
+		sendSessionIdHeader: true,
+		threadUrlTemplate: "hermes://thread/{sessionKey}",
+	});
+	await runner.runHandoff({ ...weeklyInput(runtime), token: "tok-SECRET-123" }, rec.hooks);
+
+	assert.equal(captured.length, 1);
+	const [request] = captured;
+	assert.equal(request.method, "POST");
+	assert.equal(request.url, "http://127.0.0.1:8642/v1/chat/completions");
+	assert.equal(request.headers.Authorization, "Bearer tok-SECRET-123");
+	assert.equal(request.headers["X-Hermes-Session-Id"], WEEKLY_ID);
+	assert.equal(JSON.parse(request.body ?? "{}").user, WEEKLY_ID);
+	assert.ok(!(request.headers["X-Hermes-Session-Id"] ?? "").includes(":"));
+	assert.equal(request.headers["x-openclaw-session-key"], undefined);
+	// The thread URL is still built from the colon key (unchanged by this toggle).
+	assert.deepEqual(rec.sentUrls, [`hermes://thread/${WEEKLY_KEY}`]);
+});
+
+test("G6: the id is derived once per click: header and body are the same string, and it comes from the key the click used", async () => {
+	const captured: HttpRequest[] = [];
+	const runner = createHandoffRunner();
+	let clock = 0;
+	const rec = makeRecorder(fakeHttpFn(OK_CHAT, captured), () => WEEKLY_MS + clock++);
+	const runtime = chatRuntime({ sendSessionIdHeader: true, sendSessionKeyHeader: true });
+	await runner.runHandoff(weeklyInput(runtime), rec.hooks);
+
+	const [request] = captured;
+	const headerId = request.headers["X-Hermes-Session-Id"];
+	assert.equal(headerId, JSON.parse(request.body ?? "{}").user);
+	// nowMs was read exactly once for the click, and the id is that key with ':' -> '-'.
+	assert.equal(clock, 1);
+	assert.equal(headerId, request.headers["x-openclaw-session-key"].replace(/:/g, "-"));
+	assert.equal(request.headers["x-openclaw-session-key"], WEEKLY_KEY);
+});
+
+test("added: two clicks in different milliseconds on one note send different ids", async () => {
+	const captured: HttpRequest[] = [];
+	const runner = createHandoffRunner();
+	let now = WEEKLY_MS;
+	const rec = makeRecorder(fakeHttpFn(OK_CHAT, captured), () => now);
+	const runtime = chatRuntime({ sendSessionIdHeader: true });
+	await runner.runHandoff(weeklyInput(runtime), rec.hooks);
+	now += 1;
+	await runner.runHandoff(weeklyInput(runtime), rec.hooks);
+	assert.equal(captured.length, 2);
+	assert.notEqual(captured[0].headers["X-Hermes-Session-Id"], captured[1].headers["X-Hermes-Session-Id"]);
+});
+
+test("G5/E9: toggle off, or the field absent, behaves as before: no id header, user = the session key", async () => {
+	for (const overrides of [{ sendSessionIdHeader: false }, {}] as Partial<AgentRuntime>[]) {
+		const captured: HttpRequest[] = [];
+		const runner = createHandoffRunner();
+		const rec = makeRecorder(fakeHttpFn(OK_CHAT, captured), () => WEEKLY_MS);
+		await runner.runHandoff(weeklyInput(chatRuntime(overrides)), rec.hooks);
+		const [request] = captured;
+		assert.equal(request.headers["X-Hermes-Session-Id"], undefined);
+		assert.deepEqual(Object.keys(request.headers), ["Content-Type"]);
+		assert.equal(JSON.parse(request.body ?? "{}").user, WEEKLY_KEY);
+	}
+});
+
+test("added/E13: a hook runtime with the stored toggle on sends exactly what a runtime that never had the field sends", async () => {
+	const withField: HttpRequest[] = [];
+	const withoutField: HttpRequest[] = [];
+	await createHandoffRunner().runHandoff(
+		weeklyInput(hookRuntime({ sendSessionIdHeader: true })),
+		makeRecorder(fakeHttpFn(OK_HOOK, withField), () => WEEKLY_MS).hooks
+	);
+	await createHandoffRunner().runHandoff(
+		weeklyInput(hookRuntime()),
+		makeRecorder(fakeHttpFn(OK_HOOK, withoutField), () => WEEKLY_MS).hooks
+	);
+	assert.equal(withField.length, 1);
+	// The hook request carries a fresh random Idempotency-Key per build; everything else must match.
+	const stable = (r: HttpRequest): HttpRequest => ({ ...r, headers: { ...r.headers, "Idempotency-Key": "-" } });
+	assert.deepEqual(withField.map(stable), withoutField.map(stable));
+	assert.equal(withField[0].headers["X-Hermes-Session-Id"], undefined);
+	assert.ok(!(withField[0].body ?? "").includes(WEEKLY_ID));
+	assert.equal(JSON.parse(withField[0].body ?? "{}").sessionKey, WEEKLY_KEY);
+});

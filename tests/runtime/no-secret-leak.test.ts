@@ -33,6 +33,7 @@ function chatRuntime(): AgentRuntime {
 		tokenRequired: true,
 		tokenSecretName: "hermes-secret",
 		sendSessionKeyHeader: true,
+		sendSessionIdHeader: true,
 		threadUrlTemplate: "hermes://thread/{sessionKeyPath}",
 	};
 }
@@ -277,10 +278,14 @@ test("F5: the token travels only in the Authorization header, never in the body 
 		message: "m",
 		sessionKey: "inline:n:1",
 		sendSessionKeyHeader: true,
+		sessionId: "inline-n-1",
+		sendSessionIdHeader: true,
 	});
 	assert.equal(chatRequest.headers.Authorization, BEARER);
 	assert.ok(!(chatRequest.body ?? "").includes(SECRET));
 	assert.notEqual(chatRequest.headers["x-openclaw-session-key"], SECRET);
+	assert.equal(chatRequest.headers["X-Hermes-Session-Id"], "inline-n-1");
+	assert.notEqual(chatRequest.headers["X-Hermes-Session-Id"], SECRET);
 });
 
 test("F5: an outcome whose body tries to smuggle the token back in never reaches a notice (hook kind reduces to status/ok/runId only)", async () => {

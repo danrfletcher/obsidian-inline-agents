@@ -1,5 +1,5 @@
 import type { AgentRuntime, HttpFn } from "./types";
-import { createSessionKey } from "./sessionKey";
+import { createSessionId, createSessionKey } from "./sessionKey";
 import { buildThreadUrl, openThreadUrl } from "./threadUrl";
 import { buildHandoffMessage } from "./message";
 import { buildHookRequest, classifyHookOutcome } from "./hookRequest";
@@ -178,6 +178,7 @@ export function createHandoffRunner(): {
 		hooks: HandoffHooks,
 		agentId: string,
 		sessionKey: string,
+		sessionId: string,
 		message: string
 	): Promise<void> {
 		// E11: there is deliberately no cancel, retry or close handling for a
@@ -192,6 +193,8 @@ export function createHandoffRunner(): {
 			message,
 			sessionKey,
 			sendSessionKeyHeader: input.runtime.sendSessionKeyHeader,
+			sessionId,
+			sendSessionIdHeader: input.runtime.sendSessionIdHeader === true,
 		});
 
 		// Kept as two handles on the same underlying send: `rawOutcome` so
@@ -255,13 +258,15 @@ export function createHandoffRunner(): {
 		// G8: chosen once, before sending, so the same key appears in the
 		// request and (via settle() -> buildThreadUrl) the thread URL.
 		const sessionKey = createSessionKey(input.noteBasename, hooks.nowMs());
+		// Derived here, once, from that same key; only the chat kind sends it.
+		const sessionId = createSessionId(sessionKey);
 		const agentId = input.agentIdOverride?.trim() || input.runtime.agentId;
 		const message = buildHandoffMessage(input.prompt, input.notePath, input.runtime.kind === "openclaw-hook");
 
 		if (input.runtime.kind === "openclaw-hook") {
 			await runHookHandoff(input, hooks, agentId, sessionKey, message);
 		} else {
-			await runChatHandoff(input, hooks, agentId, sessionKey, message);
+			await runChatHandoff(input, hooks, agentId, sessionKey, sessionId, message);
 		}
 	}
 

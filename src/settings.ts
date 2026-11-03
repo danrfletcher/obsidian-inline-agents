@@ -197,6 +197,7 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 							agentId: "",
 							tokenRequired: true,
 							sendSessionKeyHeader: false,
+							sendSessionIdHeader: false,
 							threadUrlTemplate: "",
 						};
 						this.plugin.settings.runtimes.push(runtime);
@@ -294,6 +295,16 @@ export class AgentConsoleSettingTab extends PluginSettingTab {
 				.addToggle((toggle) =>
 					toggle.setValue(runtime.sendSessionKeyHeader).onChange(async (value) => {
 						runtime.sendSessionKeyHeader = value;
+						await this.plugin.saveSettings();
+					})
+				);
+
+			new Setting(card)
+				.setName("Send session id as X-Hermes-Session-Id")
+				.setDesc("Hermes needs API_SERVER_KEY set to accept it.")
+				.addToggle((toggle) =>
+					toggle.setValue(runtime.sendSessionIdHeader === true).onChange(async (value) => {
+						runtime.sendSessionIdHeader = value;
 						await this.plugin.saveSettings();
 					})
 				);

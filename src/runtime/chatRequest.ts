@@ -11,6 +11,9 @@ import type { HttpOutcome, HttpRequest } from "./types";
  */
 export const CHAT_HTTP_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** The header a runtime that continues a conversation by client-chosen id reads; sent only when the runtime's "send session id" box is on. */
+export const SESSION_ID_HEADER = "X-Hermes-Session-Id";
+
 export interface ChatRequestParams {
 	baseUrl: string;
 	/** Undefined when no token is configured for this runtime at all. */
@@ -21,6 +24,10 @@ export interface ChatRequestParams {
 	sessionKey: string;
 	/** G1/G15: the runtime's own "send session key as x-openclaw-session-key" box. */
 	sendSessionKeyHeader: boolean;
+	/** The colon-free id from `createSessionId(sessionKey)`, derived once by the caller. */
+	sessionId: string;
+	/** The runtime's "send session id" box. Off: no header, and `user` stays the session key. */
+	sendSessionIdHeader: boolean;
 }
 
 function trimTrailingSlash(url: string): string {
@@ -33,6 +40,9 @@ function trimTrailingSlash(url: string): string {
  * (identifying the caller/session to the server) — distinct from the
  * message's own `role: "user"`, which is the chat turn itself. Also sends
  * `x-openclaw-session-key` when the runtime's own box for that is on.
+ * When the "send session id" box is on, the colon-free session id goes in
+ * `X-Hermes-Session-Id` and replaces the session key in `user`; when it is
+ * off the request is exactly as it was before that box existed.
  * `stream: false` is explicit rather than just omitted, since the whole
  * point is that the response is never read (F3/F9) — there's nothing to
  * stream into.
@@ -41,10 +51,11 @@ export function buildChatRequest(params: ChatRequestParams): HttpRequest {
 	const headers: Record<string, string> = { "Content-Type": "application/json" };
 	if (params.token) headers.Authorization = `Bearer ${params.token}`;
 	if (params.sendSessionKeyHeader) headers["x-openclaw-session-key"] = params.sessionKey;
+	if (params.sendSessionIdHeader) headers[SESSION_ID_HEADER] = params.sessionId;
 	const body = JSON.stringify({
 		model: params.model,
 		messages: [{ role: "user", content: params.message }],
-		user: params.sessionKey,
+		user: params.sendSessionIdHeader ? params.sessionId : params.sessionKey,
 		stream: false,
 	});
 	return { url: `${trimTrailingSlash(params.baseUrl)}/chat/completions`, method: "POST", headers, body };
