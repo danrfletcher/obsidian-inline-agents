@@ -101,6 +101,36 @@
 	color: var(--text-normal);
 }
 
+/* `input:` buttons: the transient text field that replaces the idle button
+   after a click (see buttonBlock.ts). Only the button is hidden; the thread
+   link inside it, the ✓ button, the toggle and the accordion stay put. */
+.agent-console-button.is-input-open {
+	display: none;
+}
+
+.agent-console-input-field {
+	display: flex;
+	flex-direction: column;
+	gap: 0.4em;
+	max-width: 32em;
+}
+
+/* Capped height with its own scrollbar, so long text never grows the note. */
+.agent-console-input-text {
+	width: 100%;
+	min-height: 3.2em;
+	max-height: 12em;
+	overflow-y: auto;
+	resize: none;
+	font-family: var(--font-text);
+	font-size: var(--font-ui-medium);
+}
+
+.agent-console-input-actions {
+	display: flex;
+	gap: 0.4em;
+}
+
 .agent-console-toggle {
 	display: none;
 	margin-top: 0.4em;

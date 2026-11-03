@@ -10,9 +10,14 @@ import { classifyTurnState, extractCleanText } from "./outputCapture";
 import { writeAgentOutputToFile, AppendPosition } from "./fileOutput";
 import { buildAgentContext } from "./context";
 import { renderPromptTemplate } from "./templating";
+import type { AgentContext } from "./context";
+import type { RenderPromptResult } from "./templating";
 import { parseButtonBlock, resolveModel, AgentOutputTarget, CompletionMode } from "./buttonParse";
+import { composePrompt } from "./inputPrompt";
+import { canSubmitInput, classifyInputKey } from "./inputFieldKeys";
 import { resolveClickTarget } from "./runtime/targetResolve";
-import { runClickDecision } from "./runtime/clickRouting";
+import { runClickDecision, decideClickAction, runInputSubmit } from "./runtime/clickRouting";
+import type { AgentRuntime } from "./runtime/types";
 import { createSecretStoreAdapter } from "./runtime/secretStoreAdapter";
 import { createHandoffRunner, createSingleFlightHandoff, sendingLabel, sentLabel } from "./runtime/handoff";
 import { createObsidianHttpFn } from "./runtime/httpAdapter";
@@ -32,6 +37,10 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 	// thread URL" notice genuinely once per Obsidian session rather than
 	// once per block.
 	const handoffRunner = createHandoffRunner();
+	// G13: closes the one input field that is open right now, if any, so
+	// opening a second one cancels the first. Holds a function only — never
+	// the typed text, which lives in the textarea alone (G8).
+	let closeOpenInputField: (() => void) | null = null;
 
 	plugin.registerMarkdownCodeBlockProcessor("agent-button", (source, el, ctx) => {
 		const spec = parseButtonBlock(source);
@@ -123,12 +132,24 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			});
 		};
 
+		// Renders the button's prompt. `typedText` is set only when an `input:`
+		// field was submitted: the prompt is then composed from the template
+		// and that text right now (see inputPrompt.ts), and the text itself
+		// is never rendered. Without it, rendering is exactly as before.
+		const renderPrompt = (context: AgentContext, typedText?: string): RenderPromptResult => {
+			const opts = { allowJs: plugin.settings.allowJsExpressions };
+			if (typedText === undefined) return renderPromptTemplate(spec.prompt, context, opts);
+			return composePrompt(spec.prompt, typedText, (segment) => renderPromptTemplate(segment, context, opts));
+		};
+
 		// The entire pre-PR-1.F1 click body — sessionAlive check, accordion,
-		// ensureTerm, spawn, all of it — unchanged. Also reused directly as
-		// the runtime flow's fallback-to-terminal (G12/E2/E3/E4/E6/E12):
-		// every failure before a hand-off is accepted runs the button
-		// exactly as if `target:` had been `terminal` all along.
-		const runTerminalFlow = () => {
+		// ensureTerm, spawn, all of it — unchanged apart from taking the
+		// optional `typedText` of a submitted `input:` field. Also reused
+		// directly as the runtime flow's fallback-to-terminal
+		// (G12/E2/E3/E4/E6/E12): every failure before a hand-off is accepted
+		// runs the button exactly as if `target:` had been `terminal` all
+		// along.
+		const runTerminalFlow = (typedText?: string) => {
 			if (sessionAlive) {
 				setAccordionOpen(true);
 				return;
@@ -168,7 +189,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				return;
 			}
 			const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
-			const rendered = renderPromptTemplate(spec.prompt, context, { allowJs: settings.allowJsExpressions });
+			const rendered = renderPrompt(context, typedText);
 			if (rendered.error) {
 				term?.write(`\r\n\x1b[31m[agent-console] ${rendered.error}\x1b[0m\r\n`);
 				sessionAlive = false;
@@ -246,7 +267,183 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			if (!result.opened && result.reason) new Notice(result.reason);
 		});
 
+		// The runtime flow: renders (and, with `typedText`, composes) the
+		// prompt now and hands it off. Used by a plain click and by a
+		// submitted `input:` field alike.
+		const startRuntimeFlow = (runtime: AgentRuntime, typedText?: string) => {
+			let cwd: string;
+			try {
+				cwd = plugin.getVaultBasePath();
+			} catch (err) {
+				new Notice((err as Error).message);
+				return;
+			}
+			const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
+			const rendered = renderPrompt(context, typedText);
+			if (rendered.error) {
+				new Notice(rendered.error);
+				return;
+			}
+
+			void sendHandoff(
+				{
+					runtime,
+					agentIdOverride: spec.agentId,
+					prompt: rendered.text,
+					notePath: toAbsoluteNotePath(cwd, ctx.sourcePath),
+					noteBasename: context.file.basename,
+					openRequested: spec.open ?? plugin.settings.defaultOpen,
+					token: secretStore.getToken(runtime.tokenSecretName),
+				},
+				{
+					httpFn: createObsidianHttpFn(runtime.kind === "openclaw-hook" ? HOOK_TIMEOUT_MS : CHAT_HTTP_TIMEOUT_MS),
+					nowMs: () => Date.now(),
+					openUrl: (url) => window.open(url),
+					notify: (message) => new Notice(message),
+					onSending: () => {
+						button.disabled = true;
+						threadLink.setCssStyles({ display: "none" });
+						buttonLabel.setText(sendingLabel(runtime.name));
+					},
+					onSent: (threadUrl) => {
+						button.disabled = false;
+						buttonLabel.setText(sentLabel(runtime.name));
+						// R1: href only ever carries a URL `openThreadUrl` would
+						// actually open — never a disallowed scheme (file,
+						// javascript, data, vbscript), even though the link
+						// itself still shows and stays clickable whenever a
+						// template exists (GP6/G9).
+						currentThreadUrl = threadUrl;
+						threadLink.setAttr("href", threadLinkHref(threadUrl));
+						threadLink.setCssStyles({ display: threadUrl ? "inline" : "none" });
+					},
+					// G12: every failure before the hand-off is accepted
+					// runs the button exactly as target: terminal would —
+					// see runTerminalFlow above.
+					fallbackToTerminal: () => {
+						button.disabled = false;
+						buttonLabel.setText(spec.text);
+						threadLink.setCssStyles({ display: "none" });
+						runTerminalFlow(typedText);
+					},
+				}
+			);
+		};
+
+		// The field is a transient textarea that replaces the idle button and
+		// holds the typed text in its own `value` and nowhere else (G8).
+		// Submit reads it once and passes it on as an argument. This keeps
+		// only the function that closes this block's field, if one is open.
+		let dismissInputField: (() => boolean) | null = null;
+
+		const openInputField = (placeholder: string) => {
+			// G13: opening this field cancels any other one that is open.
+			closeOpenInputField?.();
+
+			const field = wrapper.createDiv({ cls: "agent-console-input-field" });
+			wrapper.insertBefore(field, button);
+			const textarea = field.createEl("textarea", {
+				cls: "agent-console-input-text",
+				attr: { placeholder, "aria-label": placeholder, rows: "2" },
+			});
+			const actions = field.createDiv({ cls: "agent-console-input-actions" });
+			const submitBtn = actions.createEl("button", {
+				cls: "agent-console-input-submit mod-cta",
+				text: "Submit",
+				attr: { type: "button" },
+			});
+			const cancelBtn = actions.createEl("button", {
+				cls: "agent-console-input-cancel",
+				text: "Cancel",
+				attr: { type: "button" },
+			});
+			submitBtn.disabled = true;
+			// Only the button swaps: the "↗" link lives inside it, and the
+			// ✓ button, toggle and accordion are siblings that stay put.
+			button.addClass("is-input-open");
+
+			// Removes the field and brings the button back, running nothing.
+			// False if it was already closed, which is what makes a second
+			// Enter or a double-clicked Submit run once.
+			let closed = false;
+			const dismiss = (): boolean => {
+				if (closed) return false;
+				closed = true;
+				field.remove();
+				button.removeClass("is-input-open");
+				if (closeOpenInputField === dismiss) closeOpenInputField = null;
+				if (dismissInputField === dismiss) dismissInputField = null;
+				return true;
+			};
+			closeOpenInputField = dismiss;
+			dismissInputField = dismiss;
+
+			const cancel = () => {
+				if (dismiss()) button.focus();
+			};
+			const submit = () => {
+				const text = textarea.value.trim();
+				if (!canSubmitInput(text)) return;
+				if (!dismiss()) return;
+				// G7: target, prompt and the `append` position (taken inside
+				// runTerminalFlow) are all resolved now, not at click time.
+				const resolution = resolveClickTarget(spec, plugin.settings, secretStore);
+				runInputSubmit(resolution, text, {
+					notify: (message) => new Notice(message),
+					runTerminalFlow: (typed) => runTerminalFlow(typed),
+					runRuntimeFlow: (runtime, typed) => startRuntimeFlow(runtime, typed),
+				});
+				button.focus();
+			};
+
+			// G10: in Live Preview the field sits inside the editor's
+			// widget, so none of its key events may reach the editor. They
+			// are stopped on the field itself, after the textarea's own
+			// handlers below have seen them.
+			for (const type of ["keydown", "keyup", "keypress", "compositionstart", "compositionupdate", "compositionend"]) {
+				field.addEventListener(type, (evt) => evt.stopPropagation());
+			}
+			field.addEventListener("keydown", (evt) => {
+				if (evt.target !== textarea) {
+					// Esc on Submit or Cancel closes the field too (G3).
+					if (evt.key === "Escape") {
+						evt.preventDefault();
+						cancel();
+					}
+					return;
+				}
+				const action = classifyInputKey(
+					{ key: evt.key, shiftKey: evt.shiftKey, isComposing: evt.isComposing },
+					textarea.value
+				);
+				if (action === "default") return;
+				evt.preventDefault();
+				if (action === "submit") submit();
+				else if (action === "cancel") cancel();
+			});
+			textarea.addEventListener("input", () => {
+				submitBtn.disabled = !canSubmitInput(textarea.value);
+			});
+			submitBtn.addEventListener("click", submit);
+			cancelBtn.addEventListener("click", cancel);
+
+			textarea.focus();
+		};
+
 		button.addEventListener("click", () => {
+			// G1/G9: only an idle button with an `input:` line opens the
+			// field. A live terminal (including awaiting-input) or an
+			// in-flight hand-off keeps today's behaviour, below.
+			const action = decideClickAction({
+				hasInput: spec.input !== undefined,
+				sessionAlive,
+				handoffInFlight: button.disabled,
+			});
+			if (action === "open-field" && spec.input !== undefined) {
+				openInputField(spec.input);
+				return;
+			}
+
 			// Resolved before any terminal set-up (sessionAlive check,
 			// accordion, ensureTerm) — a runtime target must never flash a
 			// terminal, even for one tick (F8, G11). See
@@ -255,68 +452,8 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 			resolution.notices.forEach((notice) => new Notice(notice));
 
 			runClickDecision(resolution, {
-				runTerminalFlow,
-				runRuntimeFlow: (runtime) => {
-					let cwd: string;
-					try {
-						cwd = plugin.getVaultBasePath();
-					} catch (err) {
-						new Notice((err as Error).message);
-						return;
-					}
-					const context = buildAgentContext(plugin.app, ctx.sourcePath, cwd);
-					const rendered = renderPromptTemplate(spec.prompt, context, {
-						allowJs: plugin.settings.allowJsExpressions,
-					});
-					if (rendered.error) {
-						new Notice(rendered.error);
-						return;
-					}
-
-					void sendHandoff(
-						{
-							runtime,
-							agentIdOverride: spec.agentId,
-							prompt: rendered.text,
-							notePath: toAbsoluteNotePath(cwd, ctx.sourcePath),
-							noteBasename: context.file.basename,
-							openRequested: spec.open ?? plugin.settings.defaultOpen,
-							token: secretStore.getToken(runtime.tokenSecretName),
-						},
-						{
-							httpFn: createObsidianHttpFn(runtime.kind === "openclaw-hook" ? HOOK_TIMEOUT_MS : CHAT_HTTP_TIMEOUT_MS),
-							nowMs: () => Date.now(),
-							openUrl: (url) => window.open(url),
-							notify: (message) => new Notice(message),
-							onSending: () => {
-								button.disabled = true;
-								threadLink.setCssStyles({ display: "none" });
-								buttonLabel.setText(sendingLabel(runtime.name));
-							},
-							onSent: (threadUrl) => {
-								button.disabled = false;
-								buttonLabel.setText(sentLabel(runtime.name));
-								// R1: href only ever carries a URL `openThreadUrl` would
-								// actually open — never a disallowed scheme (file,
-								// javascript, data, vbscript), even though the link
-								// itself still shows and stays clickable whenever a
-								// template exists (GP6/G9).
-								currentThreadUrl = threadUrl;
-								threadLink.setAttr("href", threadLinkHref(threadUrl));
-								threadLink.setCssStyles({ display: threadUrl ? "inline" : "none" });
-							},
-							// G12: every failure before the hand-off is accepted
-							// runs the button exactly as target: terminal would —
-							// see runTerminalFlow above.
-							fallbackToTerminal: () => {
-								button.disabled = false;
-								buttonLabel.setText(spec.text);
-								threadLink.setCssStyles({ display: "none" });
-								runTerminalFlow();
-							},
-						}
-					);
-				},
+				runTerminalFlow: () => runTerminalFlow(),
+				runRuntimeFlow: (runtime) => startRuntimeFlow(runtime),
 			});
 		});
 
@@ -329,6 +466,9 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 
 		const child = new MarkdownRenderChild(wrapper);
 		child.onunload = () => {
+			// E3: the note closed or this block's content changed — drop an
+			// open field and run nothing.
+			dismissInputField?.();
 			handle?.kill();
 			term?.dispose();
 		};
