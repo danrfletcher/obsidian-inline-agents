@@ -124,8 +124,16 @@ test("G8: {sessionId} is inserted verbatim, never URL-encoded, while {sessionKey
 	assert.equal(url, `x://${WEEKLY_ID}?k=${WEEKLY_KEY}`);
 	assert.ok(!(url ?? "").includes("%"));
 	assert.ok(!WEEKLY_ID.includes(":"));
-	// Verbatim even for a value that encodeURIComponent would change.
-	assert.equal(buildThreadUrl("x://{sessionId}", { ...WEEKLY_VARS, sessionId: "a_b-c9" }), "x://a_b-c9");
+	// Verbatim even for a value that encodeURIComponent would change ("%" and
+	// a space become "%25" and "%20"), which pins the never-encoded rule.
+	const odd = "a%b c";
+	assert.notEqual(encodeURIComponent(odd), odd);
+	assert.equal(buildThreadUrl("x://{sessionId}", { ...WEEKLY_VARS, sessionId: odd }), `x://${odd}`);
+});
+
+test("G8: with no sessionId passed, a {sessionId} in the template is left untouched while the other placeholders still fill", () => {
+	const url = buildThreadUrl("x://{sessionId}/{agentId}/{sessionKeyPath}", { agentId: "main", sessionKey: WEEKLY_KEY });
+	assert.equal(url, "x://{sessionId}/main/inline/weekly-review/1793618103221");
 });
 
 test("G8: {sessionKey} does not eat {sessionKeyPath} nor {sessionId}, and vice versa", () => {

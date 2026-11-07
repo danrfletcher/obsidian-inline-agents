@@ -281,7 +281,7 @@ test("G3/E12: both header toggles on show the line even with an empty template; 
 	assert.deepEqual(warningLines(tab), []);
 });
 
-test("G3: the both-on line sits beside a {sessionId} template without replacing it or being replaced by it", async () => {
+test("G3: turning the session-id toggle on clears the {sessionId} template warning and leaves only the both-on line", async () => {
 	const { tab } = await newChatRuntimeTab();
 	await templateRow(tab).texts[0].type("hermes://open/{sessionId}");
 	await sessionKeyToggle(tab)?.click(true);

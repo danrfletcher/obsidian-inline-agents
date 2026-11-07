@@ -464,7 +464,7 @@ test("GP4/G5: chat runtime, toggle on: one POST carrying X-Hermes-Session-Id and
 		baseUrl: "http://127.0.0.1:8642/v1",
 		tokenRequired: true,
 		sendSessionIdHeader: true,
-		threadUrlTemplate: "hermes://thread/{sessionKey}",
+		threadUrlTemplate: "hermes://open/{sessionId}",
 	});
 	await runner.runHandoff({ ...weeklyInput(runtime), token: "tok-SECRET-123" }, rec.hooks);
 
@@ -477,8 +477,8 @@ test("GP4/G5: chat runtime, toggle on: one POST carrying X-Hermes-Session-Id and
 	assert.equal(JSON.parse(request.body ?? "{}").user, WEEKLY_ID);
 	assert.ok(!(request.headers["X-Hermes-Session-Id"] ?? "").includes(":"));
 	assert.equal(request.headers["x-openclaw-session-key"], undefined);
-	// The thread URL is still built from the colon key (unchanged by this toggle).
-	assert.deepEqual(rec.sentUrls, [`hermes://thread/${WEEKLY_KEY}`]);
+	// The {sessionId} in the thread URL is the very value sent in the header.
+	assert.deepEqual(rec.sentUrls, [`hermes://open/${request.headers["X-Hermes-Session-Id"]}`]);
 });
 
 test("G6: the id is derived once per click: header and body are the same string, and it comes from the key the click used", async () => {
