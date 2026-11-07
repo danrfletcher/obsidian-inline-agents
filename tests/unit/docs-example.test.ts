@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseButtonBlock } from "../../src/buttonParse";
-import { composePrompt, DEFAULT_INPUT_PLACEHOLDER } from "../../src/inputPrompt";
+import { composePrompt, DEFAULT_INPUT_PLACEHOLDER, parseInputKey } from "../../src/inputPrompt";
 import { renderPromptTemplate } from "../../src/templating";
 import type { AgentContext } from "../../src/context";
 
@@ -57,7 +57,8 @@ test("G11: the examples page's input example parses and composes to the prompt i
 });
 
 for (const file of ["docs/docs/reference/fields.md", "README.md"]) {
-	const blocks = agentButtonBlocks(read(file));
+	const markdown = read(file);
+	const blocks = agentButtonBlocks(markdown);
 	const inputLines = blocks.flatMap((b, i) =>
 		b
 			.split("\n")
@@ -65,13 +66,29 @@ for (const file of ["docs/docs/reference/fields.md", "README.md"]) {
 			.map((l) => ({ block: i, line: l, source: b })),
 	);
 
-	test(`G11: ${file} shows at least one input: line in an agent-button block`, () => {
-		if (file.endsWith("fields.md")) assert.ok(inputLines.length > 0, "no input: line found in any code block");
+	// Only the reference page has to show the key. The README's prose
+	// mentions `input` inline and has no such block.
+	if (file.endsWith("fields.md")) {
+		test(`G11: ${file} shows at least one input: line in an agent-button block`, () => {
+			assert.ok(inputLines.length > 0, "no input: line found in any code block");
+		});
+	}
+
+	// Every line starting with `input:` anywhere in the file must be one the
+	// block extraction found, so a block the fence regex misses (different
+	// fence, indentation, info string) can't hide a bad value from the
+	// per-line tests below. Holds trivially for a file with no such lines.
+	test(`G11: ${file} has no input: line outside an agent-button block`, () => {
+		const anywhere = markdown.split("\n").filter((l) => /^[ \t]*input:/i.test(l)).length;
+		const inBlocks = blocks.reduce((n, b) => n + b.split("\n").filter((l) => /^[ \t]*input:/i.test(l)).length, 0);
+		assert.equal(inBlocks, anywhere, "an input: line sits outside every agent-button block the test could extract");
 	});
 
 	for (const { block, line, source } of inputLines) {
-		test(`G11: ${file} block ${block}: "${line}" parses`, () => {
+		test(`G11: ${file} block ${block}: "${line}" parses to the value that line says`, () => {
+			const value = line.slice(line.indexOf(":") + 1);
 			const spec = parseButtonBlock(source);
+			assert.equal(spec.input, parseInputKey(value));
 			assert.ok(spec.input === undefined || spec.input.length > 0);
 		});
 	}

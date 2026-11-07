@@ -102,7 +102,7 @@ test("unicode, emoji and CJK text pass through unchanged", () => {
 test("a render error for any piece returns the error and the original template, with none of the typed text", () => {
 	const fail = (s: string): RenderPromptResult => (s === " BAD " ? { text: s, error: "boom" } : { text: s });
 	const typed = "SECRET-TYPED";
-	const tokenPath = composePrompt("a {{ input }} BAD {{ input }}", typed, (s) => fail(s === " BAD " ? s : s));
+	const tokenPath = composePrompt("a {{ input }} BAD {{ input }}", typed, fail);
 	assert.equal(tokenPath.error, "boom");
 	assert.equal(tokenPath.text, "a {{ input }} BAD {{ input }}");
 	assert.equal(tokenPath.text.includes(typed), false);
