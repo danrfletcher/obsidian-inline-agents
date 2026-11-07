@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { decideClickAction, runClickDecision, runInputSubmit } from "../../src/runtime/clickRouting";
 import { resolveClickTarget } from "../../src/runtime/targetResolve";
+import { createSingleFlightHandoff } from "../../src/runtime/handoff";
+import type { HandoffHooks, HandoffInput } from "../../src/runtime/handoff";
 import type { AgentRuntime, SecretStore } from "../../src/runtime/types";
 
 /**
@@ -185,6 +187,36 @@ test("G12: sessionAlive with an idle-looking button reopens the terminal, no fie
 
 test("G12/GP6: once the session has ended the same button opens the field", () => {
 	assert.equal(decideClickAction({ hasInput: true, sessionAlive: false, handoffInFlight: false }), "open-field");
+});
+
+test("G12: an in-flight hand-off gives no field and a second hand-off is ignored", async () => {
+	// The gate answers "run-as-today" while a hand-off is in flight (the
+	// button is disabled); the click is then ignored by the single-flight
+	// wrapper buttonBlock.ts puts around every hand-off. Both halves are
+	// driven here, with the real wrapper.
+	let release!: () => void;
+	const gate = new Promise<void>((r) => (release = r));
+	let started = 0;
+	const guarded = createSingleFlightHandoff(async () => {
+		started++;
+		await gate;
+	});
+	const input = {} as HandoffInput;
+	const hooks = {} as HandoffHooks;
+
+	const first = guarded(input, hooks);
+	assert.equal(decideClickAction({ hasInput: true, sessionAlive: false, handoffInFlight: true }), "run-as-today");
+	// The click that "run-as-today" lets through. Not awaited before the gate
+	// is released: without the in-flight guard it would block on the gate and
+	// hang the suite instead of failing the assertion below.
+	const second = guarded(input, hooks);
+	assert.equal(started, 1, "the second hand-off was ignored while the first was in flight");
+
+	release();
+	await Promise.all([first, second]);
+	assert.equal(started, 1, "the ignored second hand-off never started after the first settled");
+	await guarded(input, hooks);
+	assert.equal(started, 2, "a click after the first settled starts a new hand-off");
 });
 
 test("G12: an in-flight hand-off still wins over everything: no field", () => {

@@ -298,12 +298,15 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				new Notice(rendered.error);
 				return;
 			}
+			// One value for both uses: what the runtime is sent and what the
+			// terminal runs if the hand-off falls back (G14) can't drift apart.
+			const composedPrompt = rendered.text;
 
 			void sendHandoff(
 				{
 					runtime,
 					agentIdOverride: spec.agentId,
-					prompt: rendered.text,
+					prompt: composedPrompt,
 					notePath: toAbsoluteNotePath(cwd, ctx.sourcePath),
 					noteBasename: context.file.basename,
 					openRequested: spec.open ?? plugin.settings.defaultOpen,
@@ -336,7 +339,7 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 					// see runTerminalFlow above.
 					fallbackToTerminal: createFallbackToTerminal({
 						typedText,
-						composedPrompt: rendered.text,
+						composedPrompt,
 						restoreButton: () => {
 							button.disabled = false;
 							buttonLabel.setText(spec.text);
@@ -403,6 +406,11 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 				const text = textarea.value.trim();
 				if (!canSubmitInput(text)) return;
 				if (!dismiss()) return;
+				// Focus goes back to the button first, so that if the run
+				// below opens a live terminal that already exists, it keeps
+				// the focus (as after a plain click) and the user can answer
+				// the agent straight away.
+				button.focus();
 				// G7: target, prompt and the `append` position (taken inside
 				// runTerminalFlow) are all resolved now, not at click time.
 				const resolution = resolveClickTarget(spec, plugin.settings, secretStore);
@@ -411,7 +419,6 @@ export function registerAgentButtonProcessor(plugin: AgentConsolePlugin): void {
 					runTerminalFlow: (typed) => runTerminalFlow(typed),
 					runRuntimeFlow: (runtime, typed) => startRuntimeFlow(runtime, typed),
 				});
-				button.focus();
 			};
 
 			// G10: in Live Preview the field sits inside the editor's
