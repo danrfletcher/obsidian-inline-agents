@@ -9,7 +9,10 @@ function readJson(file: string): Record<string, string> {
 	return JSON.parse(readFileSync(resolve(root, file), "utf8")) as Record<string, string>;
 }
 
-const RELEASE = "0.3.2";
+// The release version is whatever manifest.json carries; the tests check that
+// everything else (package.json, the lockfile, versions.json) agrees with it,
+// so a later release does not need this file edited.
+const RELEASE = readJson("manifest.json").version;
 
 test("G12: manifest.json and package.json both carry the release version", () => {
 	assert.equal(readJson("manifest.json").version, RELEASE);
