@@ -85,8 +85,6 @@ interface Session {
 	notices: string[];
 	/** What the terminal flow was called with. */
 	terminalRuns: { typedText: string | undefined; composedPrompt: string | undefined }[];
-	/** What the terminal would actually run: the composed prompt it was given, else a render of the button's own prompt (the pre-`input:` behaviour). */
-	terminalPrompts: string[];
 	restored: number;
 	hooks: HandoffHooks;
 }
@@ -100,7 +98,6 @@ function makeSession(
 		events: [],
 		notices: [],
 		terminalRuns: [],
-		terminalPrompts: [],
 		restored: 0,
 		hooks: undefined as unknown as HandoffHooks,
 	};
@@ -123,9 +120,6 @@ function makeSession(
 			runTerminalFlow: (typed, composedPrompt) => {
 				session.events.push("terminal");
 				session.terminalRuns.push({ typedText: typed, composedPrompt });
-				// Mirrors runTerminalFlow in buttonBlock.ts: a composed prompt is run
-				// as is; without one the button's own prompt is rendered again.
-				session.terminalPrompts.push(composedPrompt !== undefined ? composedPrompt : render(TEMPLATE).text);
 			},
 		}),
 	};
@@ -167,7 +161,6 @@ function assertFellBackWithTypedText(s: Session, label: string) {
 		[{ typedText: TYPED, composedPrompt: COMPOSED }],
 		`${label}: the terminal ran once, with the typed text and composed prompt`
 	);
-	assert.deepEqual(s.terminalPrompts, [COMPOSED], `${label}: the terminal ran exactly the composed prompt`);
 	assert.equal(s.restored, 1, `${label}: the button was restored once`);
 	// E5: the notice comes first, then the terminal.
 	assert.equal(s.events[s.events.length - 1], "terminal", label);
@@ -285,6 +278,11 @@ test("F7: the body sent to a runtime is exactly buildHandoffMessage(composedProm
 
 // --- E5: render error, unknown target ---------------------------------------
 
+// This covers the message and the text it leaves out. It does not cover the
+// runtime-target path in startRuntimeFlow (src/buttonBlock.ts): that a Notice
+// is shown, nothing is spawned or sent, and sessionAlive stays false. That
+// module imports "obsidian" and xterm and cannot load under node, so the
+// tester checks it in the app.
 test("E5: a render error carries the same message as today and none of the typed text", () => {
 	const typed = "TYPED-SECRET-123 $&";
 	// {{= }} is off, so rendering fails exactly as it does for a click.

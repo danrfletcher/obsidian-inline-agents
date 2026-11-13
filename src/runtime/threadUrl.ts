@@ -19,9 +19,8 @@ export interface ThreadUrlVars {
  * inserted verbatim: it only holds a-z 0-9 - _, so it is never URL-encoded,
  * and it is filled for both runtime kinds whether or not the runtime's
  * "send session id" toggle is on) into a runtime's thread-URL template.
- * Returns
- * undefined when there's no template to fill at all (E5: fire-and-forget,
- * nothing to open).
+ * Returns undefined when there's no template to fill at all (E5:
+ * fire-and-forget, nothing to open).
  */
 export function buildThreadUrl(template: string | undefined, vars: ThreadUrlVars): string | undefined {
 	const trimmed = (template ?? "").trim();
